@@ -158,7 +158,12 @@ export class DiscordRenderer {
 
   async sendIncrementalResponse() {
     // Prevent concurrent execution
-    if (this.sendingLock) return;
+    if (this.sendingLock) {
+      await this.logger.info("send-incremental-locked", { 
+        routeKey: this.manifest.routeKey 
+      });
+      return;
+    }
     this.sendingLock = true;
     
     try {
@@ -166,6 +171,11 @@ export class DiscordRenderer {
       
       // Safety: nothing to send or all already sent
       if (!fullText || this.lastSentIndex >= fullText.length) {
+        await this.logger.info("send-incremental-no-content", { 
+          routeKey: this.manifest.routeKey,
+          fullTextLength: fullText?.length,
+          lastSentIndex: this.lastSentIndex
+        });
         return;
       }
       
@@ -173,6 +183,10 @@ export class DiscordRenderer {
       
       // Not enough content to send yet
       if (!unsentText || unsentText.length < 20) {
+        await this.logger.info("send-incremental-too-short", { 
+          routeKey: this.manifest.routeKey,
+          unsentLength: unsentText?.length
+        });
         return;
       }
       
@@ -213,9 +227,21 @@ export class DiscordRenderer {
       
       // CRITICAL: Check if we already sent this exact content
       // This prevents race condition duplicates
-      if (this.lastSentContent === toSend) {
+      const normalizedLast = this.lastSentContent?.trim();
+      const normalizedCurrent = toSend.trim();
+      if (normalizedLast === normalizedCurrent) {
+        await this.logger.info("duplicate-prevented", { 
+          routeKey: this.manifest.routeKey,
+          content: normalizedCurrent.slice(0, 50)
+        });
         return;
       }
+      
+      await this.logger.info("sending-incremental", { 
+        routeKey: this.manifest.routeKey,
+        content: normalizedCurrent.slice(0, 50),
+        lastSentContent: normalizedLast?.slice(0, 50)
+      });
       
       // Send the message
       const channel = await this.getTargetChannel();
@@ -227,7 +253,13 @@ export class DiscordRenderer {
       // Update tracking
       this.lastMessageId = message.id;
       this.lastSentIndex += sendLength;
-      this.lastSentContent = toSend; // Track what we just sent
+      this.lastSentContent = normalizedCurrent; // Track what we just sent
+      
+      await this.logger.info("message-sent", { 
+        routeKey: this.manifest.routeKey,
+        messageId: message.id,
+        lastSentIndex: this.lastSentIndex
+      });
       
     } catch (error) {
       // Log error but don't throw - sending is best effort
