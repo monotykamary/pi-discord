@@ -148,12 +148,14 @@ export class DiscordRenderer {
   }
 
   handleSessionEvent(event) {
-    // Log all events for debugging
-    this.logger.info("session-event", { 
-      routeKey: this.manifest.routeKey,
-      eventType: event.type,
-      hasToolName: !!event.toolName
-    });
+    // Only log non-message_update events to reduce noise
+    if (event.type !== "message_update") {
+      this.logger.info("session-event", { 
+        routeKey: this.manifest.routeKey,
+        eventType: event.type,
+        hasToolName: !!event.toolName
+      });
+    }
     
     if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
       this.currentAssistantText += event.assistantMessageEvent.delta;
@@ -161,13 +163,19 @@ export class DiscordRenderer {
     }
     if (event.type === "tool_execution_start") {
       this.runInBackground("tool-post-failed", async () => {
-        await this.postToolDetail(`🛠️ ${event.toolName}...`);
+        // Include tool parameters if available for richer detail
+        const params = event.parameters ? JSON.stringify(event.parameters).slice(0, 100) : "";
+        const detail = params ? `${event.toolName}(${params}...)` : event.toolName;
+        await this.postToolDetail(`🛠️ **${detail}** starting...`);
       });
     }
     if (event.type === "tool_execution_end") {
       this.runInBackground("tool-post-failed", async () => {
-        const status = event.isError ? " ❌ failed" : " ✅";
-        await this.postToolDetail(`${event.toolName}${status}`);
+        // Include result summary if available
+        const result = event.result ? JSON.stringify(event.result).slice(0, 100) : "";
+        const detail = result ? ` → ${result}...` : "";
+        const status = event.isError ? " ❌ failed" : " ✅ done";
+        await this.postToolDetail(`**${event.toolName}**${status}${detail}`);
       });
     }
   }
@@ -215,12 +223,13 @@ export class DiscordRenderer {
       if (hasParagraphBreak) {
         sendLength = paraBreakIndex + 2; // Include the \n\n
       } else {
-        // Check for sentence ending
-        const sentenceMatch = unsentText.match(/.*[.!?]\s*/s);
-        if (sentenceMatch) {
+        // Check for sentence ending - require at least 50 chars before break
+        // to avoid fragmenting short greetings like "Hi! How are you?"
+        const sentenceMatch = unsentText.match(/.*[.!?]\s+/s);
+        if (sentenceMatch && sentenceMatch[0].length >= 50) {
           sendLength = sentenceMatch[0].length;
         } else {
-          return; // No good break point yet
+          return; // No good break point yet - accumulate more content
         }
       }
       
@@ -231,8 +240,8 @@ export class DiscordRenderer {
         return;
       }
       
-      // Must have substantial content
-      if (sendLength < 10) {
+      // Must have substantial content (at least 30 chars to avoid fragmenting)
+      if (sendLength < 30) {
         return;
       }
       
