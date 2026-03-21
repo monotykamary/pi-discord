@@ -40,7 +40,8 @@ export class DiscordRenderer {
     this.sendingLock = false;
     this.creatingPlaceholder = false;
     this.lastSentContent = undefined;
-    this.creatingPlaceholder = false; // Prevent duplicate placeholder messages
+    this.pendingTools = 0;
+    this.toolIndicatorMessageId = undefined;
   }
 
   runInBackground(label, task) {
@@ -163,6 +164,8 @@ export class DiscordRenderer {
     }
     if (event.type === "tool_execution_start") {
       this.runInBackground("tool-post-failed", async () => {
+        // Always show "Using tools..." indicator as separate message or reaction
+        await this.showToolIndicator();
         // Include tool parameters if available for richer detail
         const params = event.parameters ? JSON.stringify(event.parameters).slice(0, 100) : "";
         const detail = params ? `${event.toolName}(${params}...)` : event.toolName;
@@ -176,6 +179,11 @@ export class DiscordRenderer {
         const detail = result ? ` → ${result}...` : "";
         const status = event.isError ? " ❌ failed" : " ✅ done";
         await this.postToolDetail(`**${event.toolName}**${status}${detail}`);
+        // Decrement and remove indicator when all tools done
+        this.pendingTools = Math.max(0, this.pendingTools - 1);
+        if (this.pendingTools === 0) {
+          await this.hideToolIndicator();
+        }
       });
     }
   }
@@ -393,11 +401,59 @@ export class DiscordRenderer {
     }
   }
 
+  async showToolIndicator() {
+    this.pendingTools++;
+    if (this.toolIndicatorMessageId) return; // Already showing
+    
+    try {
+      const channel = await this.getTargetChannel();
+      const indicator = await channel.send({ 
+        content: "🛠️ Using tools...", 
+        allowedMentions: { parse: [] } 
+      });
+      this.toolIndicatorMessageId = indicator.id;
+      this.lastMessageId = indicator.id; // Use as thread anchor
+      await this.logger.info("tool-indicator-shown", { 
+        routeKey: this.manifest.routeKey,
+        messageId: indicator.id 
+      });
+    } catch (err) {
+      await this.logger.warn("tool-indicator-failed", { 
+        routeKey: this.manifest.routeKey,
+        error: String(err) 
+      });
+    }
+  }
+
+  async hideToolIndicator() {
+    if (!this.toolIndicatorMessageId) return;
+    
+    try {
+      const channel = await this.getTargetChannel();
+      if ("messages" in channel) {
+        const message = await channel.messages.fetch(this.toolIndicatorMessageId);
+        if (message) {
+          // Edit to show completion instead of deleting
+          await message.edit({ content: "✅ Tools finished" });
+        }
+      }
+      this.toolIndicatorMessageId = undefined;
+      await this.logger.info("tool-indicator-hidden", { 
+        routeKey: this.manifest.routeKey 
+      });
+    } catch (err) {
+      // Ignore errors - message may already be gone
+      this.toolIndicatorMessageId = undefined;
+    }
+  }
+
   async renderQueued(item) {
     this.currentAssistantText = "";
     this.lastSentIndex = 0;
     this.lastSentContent = undefined;
     this.creatingPlaceholder = false;
+    this.pendingTools = 0;
+    this.toolIndicatorMessageId = undefined;
     this.startTyping();
   }
 
@@ -467,6 +523,8 @@ export class DiscordRenderer {
     this.currentAssistantText = "";
     this.lastSentIndex = 0;
     this.lastSentContent = undefined;
+    this.pendingTools = 0;
+    this.toolIndicatorMessageId = undefined;
   }
 
   async renderCancelled(reason = "Stopped.") {
