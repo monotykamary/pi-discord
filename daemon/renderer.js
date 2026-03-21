@@ -216,10 +216,18 @@ export class DiscordRenderer {
   }
 
   async postToolDetail(content) {
-    // If no message exists yet (tool fired before any text output), 
-    // we can't create a thread. Silently skip in this case.
+    // If no message exists yet, create a placeholder for the thread
     if (!this.lastMessageId) {
-      return;
+      try {
+        const channel = await this.getTargetChannel();
+        const placeholder = await channel.send({ 
+          content: "🛠️ Using tools...", 
+          allowedMentions: { parse: [] } 
+        });
+        this.lastMessageId = placeholder.id;
+      } catch {
+        return; // Can't create placeholder, skip tool detail
+      }
     }
     
     // Create thread off last message if not exists
