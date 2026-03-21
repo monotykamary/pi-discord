@@ -6,24 +6,40 @@ import {
   SessionManager,
   SettingsManager,
 } from "@mariozechner/pi-coding-agent";
+import type { AgentSession } from "@mariozechner/pi-coding-agent";
 import { buildInjectedContext } from "./prompt-shaper.js";
 import { createHeadlessUi } from "./headless-ui.js";
 import { createRouteSessionExtension } from "./session-extension.js";
 import { pathExists } from "../lib/fs.js";
+import type { PiDiscordConfig } from "../lib/config.js";
+import type { RouteManifest } from "./registry.js";
+import type { RoutePaths } from "../lib/paths.js";
+import type { JournalStore } from "./journal.js";
+import type { Logger } from "./logger.js";
+
+export interface SessionHostOptions {
+  agentDir: string;
+  config: PiDiscordConfig;
+  manifest: RouteManifest;
+  routePaths: RoutePaths;
+  journal: JournalStore;
+  logger: Logger;
+  uploadFile: (filePath: string, options?: { title?: string }) => Promise<{ messageId: string; url?: string }>;
+}
 
 export class RouteSessionHost {
-  /**
-   * @param {{
-   *   agentDir: string,
-   *   config: import('../lib/config.js').PiDiscordConfig,
-   *   manifest: import('./registry.js').RouteManifest,
-   *   routePaths: ReturnType<import('../lib/paths.js').getRoutePaths>,
-   *   journal: import('./journal.js').JournalStore,
-   *   logger: import('./logger.js').Logger,
-   *   uploadFile: (filePath: string, options?: { title?: string }) => Promise<{ messageId: string, url?: string }>
-   * }} options
-   */
-  constructor(options) {
+  private agentDir: string;
+  private config: PiDiscordConfig;
+  private manifest: RouteManifest;
+  private routePaths: RoutePaths;
+  private journal: JournalStore;
+  private logger: Logger;
+  private uploadFile: (filePath: string, options?: { title?: string }) => Promise<{ messageId: string; url?: string }>;
+  private currentSourceId: string | undefined;
+  private session: AgentSession | undefined;
+  private sessionPromise: Promise<AgentSession> | undefined;
+
+  constructor(options: SessionHostOptions) {
     this.agentDir = options.agentDir;
     this.config = options.config;
     this.manifest = options.manifest;
@@ -36,7 +52,7 @@ export class RouteSessionHost {
     this.sessionPromise = undefined;
   }
 
-  async ensureSession() {
+  async ensureSession(): Promise<AgentSession> {
     if (this.session) return this.session;
     if (!this.sessionPromise) {
       this.sessionPromise = this.createSession()
@@ -58,7 +74,7 @@ export class RouteSessionHost {
     return this.sessionPromise;
   }
 
-  async createSession() {
+  private async createSession(): Promise<AgentSession> {
     const authStorage = AuthStorage.create(`${this.agentDir}/auth.json`);
     const modelRegistry = new ModelRegistry(authStorage, `${this.agentDir}/models.json`);
     const settingsManager = SettingsManager.inMemory({
@@ -121,15 +137,15 @@ export class RouteSessionHost {
         switchSession: async () => ({ cancelled: true }),
         reload: async () => undefined,
       },
-      onError: (error) => {
-        void this.logger.error("route-session-extension-error", error);
+      onError: (error: unknown) => {
+        void this.logger.error("route-session-extension-error", { error: String(error) });
       },
     });
 
     return session;
   }
 
-  async dispose() {
+  async dispose(): Promise<void> {
     this.currentSourceId = undefined;
     const session = this.session ?? await this.sessionPromise?.catch(() => undefined);
     if (!session) return;
