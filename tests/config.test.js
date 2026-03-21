@@ -6,6 +6,28 @@ import { mkdtemp } from "node:fs/promises";
 import { createDefaultConfig, loadConfig, normalizeConfig, saveConfig, validateConfig } from "../lib/config.js";
 import { getPaths } from "../lib/paths.js";
 
+test("normalizeConfig handles hot zone configuration", () => {
+  const paths = getPaths({ agentDir: "/tmp/agent", workspaceDir: "/tmp/agent/pi-discord" });
+  
+  // Default is 10 minutes
+  const defaultConfig = normalizeConfig(paths, {});
+  assert.equal(defaultConfig.hotZoneMinutes, 10);
+
+  // Can be set to 0 (disabled)
+  const disabled = normalizeConfig(paths, { hotZoneMinutes: 0 });
+  assert.equal(disabled.hotZoneMinutes, 0);
+
+  // Can be customized
+  const custom = normalizeConfig(paths, { hotZoneMinutes: 30 });
+  assert.equal(custom.hotZoneMinutes, 30);
+
+  // Falls back on invalid values
+  const invalid = normalizeConfig(paths, { hotZoneMinutes: -5 });
+  assert.equal(invalid.hotZoneMinutes, 10);
+  const nan = normalizeConfig(paths, { hotZoneMinutes: NaN });
+  assert.equal(nan.hotZoneMinutes, 10);
+});
+
 test("default config uses dedicated workspace mode and sane concurrency", () => {
   const config = createDefaultConfig(getPaths({ agentDir: "/tmp/agent", workspaceDir: "/tmp/agent/pi-discord" }));
   assert.equal(config.workspaceMode, "dedicated");

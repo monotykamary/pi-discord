@@ -100,6 +100,7 @@ export class PiDiscordDaemon {
     this.routeContexts = new Map();
     this.routePromises = new Map();
     this.currentRuns = new Map();
+    this.userHotZones = new Map(); // key: `${routeKey}:${userId}`, value: expiryTimestamp
     this.workerId = `daemon-${process.pid}`;
     this.heartbeat = undefined;
     this.stopping = false;
@@ -380,8 +381,17 @@ export class PiDiscordDaemon {
     const isDm = !message.guildId;
     const triggerMatch = this.checkTriggerWord(message.content);
 
-    if (!botMentioned && !isDm && !triggerMatch) {
-      const scope = this.resolveScopeFromChannel(message.guildId ?? null, message.channelId, message.channel);
+    // Determine if this is a warm-route trigger (not mention/DM)
+    const isWarmTrigger = !botMentioned && !isDm && triggerMatch;
+
+    const scope = this.resolveScopeFromChannel(message.guildId ?? null, message.channelId, message.channel);
+    const hotZoneKey = `${scope.routeKey}:${message.author.id}`;
+    const now = Date.now();
+    const inHotZone = (this.userHotZones.get(hotZoneKey) ?? 0) > now;
+
+    // Check if we should process this message
+    const shouldProcess = botMentioned || isDm || triggerMatch || inHotZone;
+    if (!shouldProcess) {
       const route = await this.getExistingRoute(scope);
       if (!route) return;
       await route.journal.append({
@@ -396,10 +406,6 @@ export class PiDiscordDaemon {
       return;
     }
 
-    // Determine if this is a warm-route trigger (not mention/DM)
-    const isWarmTrigger = !botMentioned && !isDm && triggerMatch;
-
-    const scope = this.resolveScopeFromChannel(message.guildId ?? null, message.channelId, message.channel);
     // For warm triggers, only use existing routes (don't create new ones)
     const route = isWarmTrigger
       ? await this.getExistingRoute(scope)
@@ -407,6 +413,13 @@ export class PiDiscordDaemon {
 
     if (!route) return; // Warm trigger with no existing route - drop silently
     if (route.journal.hasSource(message.id) || route.queue.hasSource(message.id)) return;
+
+    // Extend hot zone on explicit triggers (mention, DM, trigger word) but not on hot zone continuation
+    const isExplicitTrigger = botMentioned || isDm || triggerMatch;
+    if (isExplicitTrigger && this.config.hotZoneMinutes > 0) {
+      const expiry = now + this.config.hotZoneMinutes * 60_000;
+      this.userHotZones.set(hotZoneKey, expiry);
+    }
 
     const savedAttachments = await this.saveInboundAttachments(route, message.attachments.values(), message.id);
     const replyContext = message.reference?.messageId ? await this.fetchReplyContext(message) : undefined;
@@ -418,7 +431,7 @@ export class PiDiscordDaemon {
     } else {
       rawText = message.content ?? "";
     }
-    const triggerLabel = isDm ? "dm" : (triggerMatch ? "trigger" : "mention");
+    const triggerLabel = isDm ? "dm" : (triggerMatch ? "trigger" : inHotZone ? "hotzone" : "mention");
     const promptText = buildPromptText({
       routeKey: route.manifest.routeKey,
       scope: route.manifest.scope,
