@@ -215,6 +215,60 @@ export class DiscordRenderer {
     return { messageId: message.id, url: message.attachments.first()?.url };
   }
 
+  getLanguageFromExtension(ext) {
+    const extMap = {
+      'js': 'javascript',
+      'ts': 'typescript',
+      'jsx': 'jsx',
+      'tsx': 'tsx',
+      'py': 'python',
+      'rb': 'ruby',
+      'go': 'go',
+      'rs': 'rust',
+      'java': 'java',
+      'c': 'c',
+      'cpp': 'cpp',
+      'h': 'c',
+      'hpp': 'cpp',
+      'cs': 'csharp',
+      'php': 'php',
+      'swift': 'swift',
+      'kt': 'kotlin',
+      'scala': 'scala',
+      'r': 'r',
+      'm': 'objectivec',
+      'sh': 'bash',
+      'bash': 'bash',
+      'zsh': 'bash',
+      'fish': 'fish',
+      'ps1': 'powershell',
+      'sql': 'sql',
+      'yaml': 'yaml',
+      'yml': 'yaml',
+      'json': 'json',
+      'xml': 'xml',
+      'html': 'html',
+      'htm': 'html',
+      'css': 'css',
+      'scss': 'scss',
+      'sass': 'sass',
+      'less': 'less',
+      'md': 'markdown',
+      'markdown': 'markdown',
+      'dockerfile': 'dockerfile',
+      'tf': 'terraform',
+      'hcl': 'hcl',
+      'vue': 'vue',
+      'svelte': 'svelte',
+      'astro': 'astro',
+      'diff': 'diff',
+      'patch': 'diff',
+      'txt': 'text',
+      'log': 'text',
+    };
+    return extMap[ext?.toLowerCase()] || ext || 'text';
+  }
+
   async uploadContentToThread(filename, content, lang, options = {}) {
     // Ensure thread exists first (create if needed)
     let thread = await this.ensureDetailsThread();
@@ -368,22 +422,25 @@ export class DiscordRenderer {
           const { content, filename, isDiff } = this.extractToolContent(event, params);
           
           if (content) {
-            // Determine file extension based on tool type or filename
+            // Determine file extension and language for syntax highlighting
             let ext = filename ? filename.split('.').pop() : 'txt';
             if (event.toolName === 'read' && !filename) ext = 'txt';
             if (isDiff) ext = 'diff';
+            
+            // Map extension to Discord language identifier
+            const lang = this.getLanguageFromExtension(ext);
             
             // Create display filename
             const displayFilename = filename || `${event.toolName}-result.${ext}`;
             
             if (content.length > 1000) {
               // Upload as file attachment
-              await this.uploadContentToThread(displayFilename, content, ext, {
+              await this.uploadContentToThread(displayFilename, content, lang, {
                 title: toolDisplay
               });
             } else {
-              // Wrap in appropriate codeblock
-              const resultDisplay = `\n\`\`\`${ext}\n${content}\n\`\`\``;
+              // Wrap in appropriate codeblock with language
+              const resultDisplay = `\n\`\`\`${lang}\n${content}\n\`\`\``;
               await this.postToolDetail(`${toolDisplay}${resultDisplay}`);
             }
           } else {
@@ -486,6 +543,23 @@ export class DiscordRenderer {
           filename: filePath,
           isDiff: false
         };
+      }
+    }
+    
+    // Handle read tools - extract file path for syntax highlighting
+    if (event.toolName === 'read' || event.toolName === 'read_file') {
+      const filePath = params.path || result.path || result.filePath;
+      
+      if (result.content) {
+        if (Array.isArray(result.content)) {
+          const textBlock = result.content.find(c => c.type === 'text');
+          if (textBlock && textBlock.text) {
+            return { content: textBlock.text, filename: filePath, isDiff: false };
+          }
+        }
+        if (typeof result.content === 'string') {
+          return { content: result.content, filename: filePath, isDiff: false };
+        }
       }
     }
     
