@@ -9,19 +9,21 @@ export function makeRouteKey(input) {
 }
 
 /**
- * Formats a route key for human-readable display.
- * Shows short IDs with clear separators instead of concatenated numbers.
- * @param {string} routeKey
+ * Formats a route for human-readable display in Discord.
+ * Uses Discord mention syntax for clickable channel/thread links.
+ * @param {{ guildId: string | null, channelId: string, threadId: string | null }} scope
  * @returns {string}
  */
-export function formatRouteKey(routeKey) {
-  const parts = routeKey.split("__");
-  if (parts.length !== 3) return routeKey;
+export function formatRoute(scope) {
+  if (scope.guildId === null || scope.guildId === undefined) {
+    return "DM";
+  }
   
-  const [guild, channel, thread] = parts;
-  const shortGuild = guild === "dm" ? "DM" : guild.slice(0, 6) + "…";
-  const shortChannel = channel.slice(0, 6) + "…";
-  const threadLabel = thread === "root" ? "channel" : `thread:${thread.slice(0, 6)}…`;
+  // Threads: mention the thread directly
+  if (scope.threadId && scope.threadId !== "root") {
+    return `<#${scope.threadId}>`;
+  }
   
-  return `${shortGuild} / ${shortChannel} / ${threadLabel}`;
+  // Regular channel
+  return `<#${scope.channelId}>`;
 }

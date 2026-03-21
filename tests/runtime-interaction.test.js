@@ -70,6 +70,8 @@ test("handleInteraction handles pi-discord stop buttons", async () => {
   let replyPayload;
   await daemon.handleInteraction({
     guildId: "g1",
+    channelId: "c1",
+    channel: { isThread: () => false },
     user: { id: "u1" },
     customId: "pi-discord:stop:g1__c1__root",
     isButton: () => true,
@@ -80,7 +82,7 @@ test("handleInteraction handles pi-discord stop buttons", async () => {
   });
 
   assert.equal(abortedRouteKey, "g1__c1__root");
-  assert.equal(replyPayload.content, "Stop requested for g1… / c1… / channel.");
+  assert.equal(replyPayload.content, "Stop requested for <#c1>.");
   assert.equal(replyPayload.ephemeral, true);
 });
 
