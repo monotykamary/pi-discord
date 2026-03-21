@@ -35,6 +35,7 @@ export class DiscordRenderer {
     this.enableDetailsThreads = options.enableDetailsThreads;
     this.currentAssistantText = "";
     this.typingInterval = undefined;
+    this.lastMessageId = undefined; // Track last message for thread creation
   }
 
   runInBackground(label, task) {
@@ -126,12 +127,74 @@ export class DiscordRenderer {
   }
 
   handleSessionEvent(event) {
-    // Accumulate response text for final message
     if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
       this.currentAssistantText += event.assistantMessageEvent.delta;
+      // Send incremental messages as text arrives (natural conversation)
+      this.sendIncrementalResponse();
     }
-    // Tool events are logged to journal only, not posted to Discord
-    // for clean conversation flow
+    if (event.type === "tool_execution_start") {
+      this.runInBackground("tool-post-failed", async () => {
+        await this.postToolDetail(`🛠️ ${event.toolName}...`);
+      });
+    }
+    if (event.type === "tool_execution_end") {
+      this.runInBackground("tool-post-failed", async () => {
+        const status = event.isError ? " ❌ failed" : " ✅";
+        await this.postToolDetail(`${event.toolName}${status}`);
+      });
+    }
+  }
+
+  async sendIncrementalResponse() {
+    const text = this.currentAssistantText.trim();
+    if (!text) return;
+    
+    // Only send if we have a complete sentence/thought (ends with punctuation or newline)
+    // or if it's been accumulating for a while
+    const endsWithBreak = /[.!?\n]$/.test(text);
+    if (!endsWithBreak) return;
+    
+    try {
+      const channel = await this.getTargetChannel();
+      const message = await channel.send({ content: text.slice(0, DISCORD_MESSAGE_LIMIT), allowedMentions: { parse: [] } });
+      this.lastMessageId = message.id;
+      // Clear sent text so we don't duplicate
+      this.currentAssistantText = "";
+    } catch {
+      // Ignore send errors
+    }
+  }
+
+  async postToolDetail(content) {
+    // Create thread off last message if not exists
+    if (!this.manifest.detailsThreadId && this.lastMessageId && this.enableDetailsThreads) {
+      try {
+        const channel = await this.getTargetChannel();
+        if ("messages" in channel) {
+          const message = await channel.messages.fetch(this.lastMessageId);
+          if (typeof message.startThread === "function") {
+            const thread = await message.startThread({
+              name: "Tool calls",
+              autoArchiveDuration: 60,
+            });
+            this.manifest.detailsThreadId = thread.id;
+            await this.persistManifest();
+          }
+        }
+      } catch {
+        // Thread creation failed, continue without it
+      }
+    }
+    // Post to thread or silently skip if no thread
+    const payload = { content: content.slice(0, DISCORD_MESSAGE_LIMIT), allowedMentions: { parse: [] } };
+    const thread = await this.ensureDetailsThread();
+    if (thread && "send" in thread) {
+      try {
+        await thread.send(payload);
+      } catch {
+        // Ignore thread send errors
+      }
+    }
   }
 
   async renderQueued(item) {
@@ -170,26 +233,38 @@ export class DiscordRenderer {
 
   async renderSuccess() {
     this.stopTyping();
-    const channel = await this.getTargetChannel();
-    const chunks = splitDiscordText(this.currentAssistantText || "Done.");
-    const message = await channel.send({ content: chunks[0], allowedMentions: { parse: [] } });
-    this.manifest.primaryMessageId = message.id;
-    await this.persistManifest();
-    // Send remaining chunks if any
-    for (const chunk of chunks.slice(1)) {
-      await channel.send({ content: chunk, allowedMentions: { parse: [] } });
+    // Send any remaining text that wasn't sent incrementally
+    const remaining = this.currentAssistantText.trim();
+    if (remaining) {
+      try {
+        const channel = await this.getTargetChannel();
+        const message = await channel.send({ content: remaining.slice(0, DISCORD_MESSAGE_LIMIT), allowedMentions: { parse: [] } });
+        this.manifest.primaryMessageId = message.id;
+        await this.persistManifest();
+      } catch {
+        // Ignore send errors
+      }
     }
+    this.currentAssistantText = "";
   }
 
   async renderCancelled(reason = "Stopped.") {
     this.stopTyping();
-    const channel = await this.getTargetChannel();
-    await channel.send({ content: `*${reason}*`, allowedMentions: { parse: [] } });
+    try {
+      const channel = await this.getTargetChannel();
+      await channel.send({ content: `*${reason}*`, allowedMentions: { parse: [] } });
+    } catch {
+      // Ignore send errors
+    }
   }
 
   async renderFailure(error) {
     this.stopTyping();
-    const channel = await this.getTargetChannel();
-    await channel.send({ content: `**Error:** ${String(error).slice(0, 1800)}`, allowedMentions: { parse: [] } });
+    try {
+      const channel = await this.getTargetChannel();
+      await channel.send({ content: `**Error:** ${String(error).slice(0, 1800)}`, allowedMentions: { parse: [] } });
+    } catch {
+      // Ignore send errors
+    }
   }
 }
