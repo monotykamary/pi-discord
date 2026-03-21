@@ -147,19 +147,36 @@ export class DiscordRenderer {
 
   async sendIncrementalResponse() {
     const text = this.currentAssistantText.trim();
-    if (!text) return;
+    if (!text || text.length < 20) return; // Need substantial text
     
-    // Only send if we have a complete sentence/thought (ends with punctuation or newline)
-    // or if it's been accumulating for a while
-    const endsWithBreak = /[.!?\n]$/.test(text);
-    if (!endsWithBreak) return;
+    // Only send on paragraph breaks (double newline) or clear sentence endings
+    // Don't send if we might be in a code block or mid-line
+    const hasParagraphBreak = text.includes('\n\n');
+    const endsWithSentence = /[.!?]\s*$/.test(text);
+    const inCodeBlock = (text.match(/```/g) || []).length % 2 === 1;
+    
+    if (!hasParagraphBreak && !endsWithSentence) return;
+    if (inCodeBlock) return; // Don't break code blocks
+    
+    // Find the last good break point
+    let sendUpTo = text.length;
+    if (hasParagraphBreak) {
+      sendUpTo = text.lastIndexOf('\n\n') + 2;
+    } else if (endsWithSentence) {
+      // Find last sentence end
+      const match = text.match(/.*[.!?]\s*/s);
+      if (match) sendUpTo = match[0].length;
+    }
+    
+    const toSend = text.slice(0, sendUpTo).trim();
+    if (!toSend || toSend.length < 10) return;
     
     try {
       const channel = await this.getTargetChannel();
-      const message = await channel.send({ content: text.slice(0, DISCORD_MESSAGE_LIMIT), allowedMentions: { parse: [] } });
+      const message = await channel.send({ content: toSend.slice(0, DISCORD_MESSAGE_LIMIT), allowedMentions: { parse: [] } });
       this.lastMessageId = message.id;
-      // Clear sent text so we don't duplicate
-      this.currentAssistantText = "";
+      // Keep remaining text for next send
+      this.currentAssistantText = text.slice(sendUpTo).trimStart();
     } catch {
       // Ignore send errors
     }
