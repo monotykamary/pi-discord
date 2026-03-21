@@ -447,13 +447,22 @@ export class DiscordRenderer {
       }
     }
     
-    // Handle diff/edit tools - extract from parameters since SDK doesn't return diff
+    // Handle diff/edit tools - extract from result.details or parameters
     if (event.toolName === 'str_replace' || event.toolName === 'edit' || event.toolName === 'apply_diff') {
-      const filePath = params.filePath || params.path || result.filePath || result.path;
+      const filePath = params.path || params.filePath || result.filePath || result.path;
+      
+      // SDK stores diff in result.details.diff
+      if (result.details?.diff) {
+        return {
+          content: result.details.diff,
+          filename: filePath,
+          isDiff: true
+        };
+      }
       
       // Try different parameter name conventions
-      const oldStr = params.old_string || params.search || params.oldString || params.old;
-      const newStr = params.new_string || params.replace || params.newString || params.new;
+      const oldStr = params.oldText || params.old_string || params.search || params.oldString || params.old;
+      const newStr = params.newText || params.new_string || params.replace || params.newString || params.new;
       
       if (oldStr && newStr) {
         // Create a simple unified diff format
