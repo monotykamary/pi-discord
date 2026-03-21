@@ -192,8 +192,8 @@ export class DiscordRenderer {
     }
     if (event.type === "tool_execution_end") {
       this.runInBackground("tool-post-failed", async () => {
-        const status = event.isError ? " ❌ failed" : " ✅ done";
-        let resultDisplay = "";
+        // Simple format: 🛠️ toolname (no checkmark, no "done")
+        const toolDisplay = `🛠️ **${event.toolName}**`;
         
         // Handle large JSON results as file uploads
         if (event.result) {
@@ -201,15 +201,15 @@ export class DiscordRenderer {
           if (resultJson.length > 1000) {
             // Upload as file attachment
             await this.uploadJsonToThread(`${event.toolName}-result.json`, resultJson, {
-              title: `**${event.toolName}**${status}`
+              title: toolDisplay
             });
           } else {
             // Wrap in codeblock for small results
-            resultDisplay = `\n\`\`\`json\n${resultJson}\n\`\`\``;
-            await this.postToolDetail(`**${event.toolName}**${status}${resultDisplay}`);
+            const resultDisplay = `\n\`\`\`json\n${resultJson}\n\`\`\``;
+            await this.postToolDetail(`${toolDisplay}${resultDisplay}`);
           }
         } else {
-          await this.postToolDetail(`**${event.toolName}**${status}`);
+          await this.postToolDetail(toolDisplay);
         }
         
         // Decrement and remove indicator when all tools done
