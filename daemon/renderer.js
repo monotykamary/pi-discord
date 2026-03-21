@@ -88,16 +88,14 @@ export class DiscordRenderer {
           error: String(err) 
         });
       }
-      // Clear stale thread ID
+      // Clear stale thread ID - don't persist, it's ephemeral
       this.manifest.detailsThreadId = undefined;
-      await this.persistManifest();
     }
     return undefined;
   }
 
   async clearDetailsThread(reason, error) {
     this.manifest.detailsThreadId = undefined;
-    await this.persistManifest();
     await this.logger.warn(reason, { routeKey: this.manifest.routeKey, error: String(error) });
   }
 
@@ -333,7 +331,7 @@ export class DiscordRenderer {
               autoArchiveDuration: 60,
             });
             this.manifest.detailsThreadId = thread.id;
-            await this.persistManifest();
+            // Don't persist - thread is ephemeral per request
             await this.logger.info("tool-thread-created", { 
               routeKey: this.manifest.routeKey, 
               threadId: thread.id,
@@ -447,6 +445,8 @@ export class DiscordRenderer {
     this.creatingPlaceholder = false;
     this.pendingTools = 0;
     this.toolIndicatorMessageId = undefined;
+    // Reset thread ID - each request gets its own fresh thread (ephemeral)
+    this.manifest.detailsThreadId = undefined;
     this.startTyping();
   }
 
