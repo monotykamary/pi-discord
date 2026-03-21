@@ -234,24 +234,24 @@ test("tool execution flow: indicator -> thread -> completion", async () => {
   assert.equal(threads.size, 1, "Thread should persist");
 });
 
-test("postToolDetail falls back to lastMessageId if no indicator", async () => {
+test("postToolDetail creates indicator if no anchor exists", async () => {
   const { mockClient, sentMessages, threads } = createMockClient();
   const manifest = createMockManifest();
   const renderer = createRenderer(mockClient, manifest);
   
-  // Simulate text was sent first (no indicator created)
-  renderer.lastMessageId = "msg-text";
-  sentMessages.push({ messageId: "msg-text", content: "Some response text" });
-  
-  // Post tool detail - should use lastMessageId as anchor
+  // No indicator, no lastMessageId - should create indicator first
   await renderer.postToolDetail("tool detail");
   
-  // Should create thread off lastMessageId since no indicator
-  assert.ok(manifest.detailsThreadId, "Should create thread using lastMessageId");
+  // Should have created indicator, then thread, then posted
+  assert.ok(renderer.toolIndicatorMessageId, "Should create indicator");
+  assert.ok(manifest.detailsThreadId, "Should create thread");
   assert.equal(threads.size, 1, "Should create one thread");
   
+  const indicator = sentMessages.find(m => m.content.includes("Using tools"));
+  assert.ok(indicator, "Should have indicator message");
+  
   const threadPosts = sentMessages.filter(m => m.isThread);
-  assert.equal(threadPosts.length, 1, "Should post to thread");
+  assert.equal(threadPosts.length, 1, "Should post tool detail to thread");
 });
 
 test("ensureDetailsThread returns undefined when disabled", async () => {

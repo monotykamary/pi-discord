@@ -304,15 +304,21 @@ export class DiscordRenderer {
 
   async postToolDetail(content) {
     // Use tool indicator message as thread anchor if available
-    const threadAnchorId = this.toolIndicatorMessageId || this.lastMessageId;
+    let threadAnchorId = this.toolIndicatorMessageId || this.lastMessageId;
     
+    // If no anchor exists, create indicator first
     if (!threadAnchorId) {
-      await this.logger.info("tool-thread-no-anchor", { 
+      await this.showToolIndicator();
+      threadAnchorId = this.toolIndicatorMessageId;
+    }
+    
+    // Now we MUST have an anchor
+    if (!threadAnchorId) {
+      await this.logger.error("tool-thread-fatal", { 
         routeKey: this.manifest.routeKey,
-        hasIndicator: !!this.toolIndicatorMessageId,
-        hasLastMessage: !!this.lastMessageId
+        error: "Failed to create indicator anchor"
       });
-      return; // Can't create thread without an anchor message
+      return; // This should never happen
     }
     
     // Create thread off anchor message if not exists
