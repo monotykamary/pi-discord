@@ -80,7 +80,7 @@ test("handleInteraction handles pi-discord stop buttons", async () => {
   });
 
   assert.equal(abortedRouteKey, "g1__c1__root");
-  assert.equal(replyPayload.content, "Stop requested for g1__c1__root.");
+  assert.equal(replyPayload.content, "Stop requested for g1… / c1… / channel.");
   assert.equal(replyPayload.ephemeral, true);
 });
 

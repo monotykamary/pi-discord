@@ -13,7 +13,7 @@ import { buildPromptText } from "./prompt-shaper.js";
 import { RouteQueueStore } from "./queue-store.js";
 import { DiscordRenderer } from "./renderer.js";
 import { RouteRegistry, createRouteManifest } from "./registry.js";
-import { makeRouteKey } from "./route-key.js";
+import { makeRouteKey, formatRouteKey } from "./route-key.js";
 import { RouteSessionHost } from "./session-host.js";
 import { ensureDir, pathExists, removeIfExists, writeJson } from "../lib/fs.js";
 import { getRoutePaths } from "../lib/paths.js";
@@ -499,7 +499,7 @@ export class PiDiscordDaemon {
       }
       const stopped = await this.abortRoute(routeKey);
       await interaction.reply({
-        content: stopped ? `Stop requested for ${routeKey}.` : `No active run for ${routeKey}.`,
+        content: stopped ? `Stop requested for ${formatRouteKey(routeKey)}.` : `No active run for ${formatRouteKey(routeKey)}.`,
         ephemeral: true,
       });
       return;
@@ -522,12 +522,12 @@ export class PiDiscordDaemon {
       const scope = this.resolveScopeFromChannel(interaction.guildId ?? null, interaction.channelId, interaction.channel);
       const route = await this.getExistingRoute(scope);
       if (!route) {
-        await interaction.reply({ content: `Route ${scope.routeKey} has no saved state yet.`, ephemeral: true });
+        await interaction.reply({ content: `Route ${formatRouteKey(scope.routeKey)} has no saved state yet.`, ephemeral: true });
         return;
       }
       const queued = route.queue.list().filter((item) => item.state === "queued").length;
       const running = route.queue.list().filter((item) => item.state === "running" || item.state === "leased").length;
-      await interaction.reply({ content: `Route ${route.manifest.routeKey}\nQueued: ${queued}\nRunning: ${running}`, ephemeral: true });
+      await interaction.reply({ content: `Route ${formatRouteKey(route.manifest.routeKey)}\nQueued: ${queued}\nRunning: ${running}`, ephemeral: true });
       return;
     }
 
@@ -539,7 +539,7 @@ export class PiDiscordDaemon {
       const scope = this.resolveScopeFromChannel(interaction.guildId ?? null, interaction.channelId, interaction.channel);
       const stopped = await this.abortRoute(scope.routeKey);
       await interaction.reply({
-        content: stopped ? `Stop requested for ${scope.routeKey}.` : `No active run for ${scope.routeKey}.`,
+        content: stopped ? `Stop requested for ${formatRouteKey(scope.routeKey)}.` : `No active run for ${formatRouteKey(scope.routeKey)}.`,
         ephemeral: true,
       });
       return;
@@ -554,13 +554,13 @@ export class PiDiscordDaemon {
       await this.abortRoute(scope.routeKey);
       const route = await this.getExistingRoute(scope);
       if (!route) {
-        await interaction.reply({ content: `Route ${scope.routeKey} has no saved state to reset.`, ephemeral: true });
+        await interaction.reply({ content: `Route ${formatRouteKey(scope.routeKey)} has no saved state to reset.`, ephemeral: true });
         return;
       }
       await route.host.dispose();
       route.manifest.sessionFile = undefined;
       await this.registry.saveManifest(route.manifest);
-      await interaction.reply({ content: `Reset route ${scope.routeKey}.`, ephemeral: true });
+      await interaction.reply({ content: `Reset route ${formatRouteKey(scope.routeKey)}.`, ephemeral: true });
       return;
     }
 
