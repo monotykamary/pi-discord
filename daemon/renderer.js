@@ -37,7 +37,10 @@ export class DiscordRenderer {
     this.typingInterval = undefined;
     this.lastMessageId = undefined;
     this.lastSentIndex = 0;
-    this.sendingLock = false; // Prevent concurrent sendIncrementalResponse calls
+    this.sendingLock = false;
+    this.creatingPlaceholder = false;
+    this.lastSentContent = undefined;
+    this.creatingPlaceholder = false; // Prevent duplicate placeholder messages
   }
 
   runInBackground(label, task) {
@@ -154,6 +157,12 @@ export class DiscordRenderer {
     
     try {
       const fullText = this.currentAssistantText;
+      
+      // Safety: nothing to send or all already sent
+      if (!fullText || this.lastSentIndex >= fullText.length) {
+        return;
+      }
+      
       const unsentText = fullText.slice(this.lastSentIndex).trimStart();
       
       // Not enough content to send yet
@@ -196,6 +205,12 @@ export class DiscordRenderer {
         return;
       }
       
+      // CRITICAL: Check if we already sent this exact content
+      // This prevents race condition duplicates
+      if (this.lastSentContent === toSend) {
+        return;
+      }
+      
       // Send the message
       const channel = await this.getTargetChannel();
       const message = await channel.send({ 
@@ -206,6 +221,7 @@ export class DiscordRenderer {
       // Update tracking
       this.lastMessageId = message.id;
       this.lastSentIndex += sendLength;
+      this.lastSentContent = toSend; // Track what we just sent
       
     } catch (error) {
       // Log error but don't throw - sending is best effort
@@ -217,7 +233,8 @@ export class DiscordRenderer {
 
   async postToolDetail(content) {
     // If no message exists yet, create a placeholder for the thread
-    if (!this.lastMessageId) {
+    if (!this.lastMessageId && !this.creatingPlaceholder) {
+      this.creatingPlaceholder = true;
       try {
         const channel = await this.getTargetChannel();
         const placeholder = await channel.send({ 
@@ -226,12 +243,19 @@ export class DiscordRenderer {
         });
         this.lastMessageId = placeholder.id;
       } catch {
-        return; // Can't create placeholder, skip tool detail
+        // Can't create placeholder, skip tool detail
+      } finally {
+        this.creatingPlaceholder = false;
       }
     }
     
+    // If still no messageId (creation failed or in progress), skip
+    if (!this.lastMessageId) {
+      return;
+    }
+    
     // Create thread off last message if not exists
-    if (!this.manifest.detailsThreadId && this.enableDetailsThreads) {
+    if (!this.manifest.detailsThreadId && this.enableDetailsThreads && this.lastMessageId) {
       try {
         const channel = await this.getTargetChannel();
         if ("messages" in channel) {
@@ -245,8 +269,13 @@ export class DiscordRenderer {
             await this.persistManifest();
           }
         }
-      } catch {
-        // Thread creation failed, continue without it
+      } catch (err) {
+        // Thread creation failed, log but continue
+        await this.logger.warn("tool-thread-create-failed", { 
+          routeKey: this.manifest.routeKey, 
+          lastMessageId: this.lastMessageId,
+          error: String(err) 
+        });
       }
     }
     
@@ -254,20 +283,33 @@ export class DiscordRenderer {
     const thread = await this.ensureDetailsThread();
     if (thread && "send" in thread) {
       try {
-        const payload = { 
+        await thread.send({ 
           content: content.slice(0, DISCORD_MESSAGE_LIMIT), 
           allowedMentions: { parse: [] } 
-        };
-        await thread.send(payload);
-      } catch {
-        // Ignore thread send errors
+        });
+      } catch (err) {
+        // Log but don't throw
+        await this.logger.warn("tool-thread-send-failed", { 
+          routeKey: this.manifest.routeKey,
+          content: content.slice(0, 50),
+          error: String(err) 
+        });
       }
+    } else {
+      await this.logger.info("tool-thread-not-available", { 
+        routeKey: this.manifest.routeKey,
+        hasThreadId: !!this.manifest.detailsThreadId,
+        hasLastMessageId: !!this.lastMessageId,
+        enableDetailsThreads: this.enableDetailsThreads
+      });
     }
   }
 
   async renderQueued(item) {
     this.currentAssistantText = "";
     this.lastSentIndex = 0;
+    this.lastSentContent = undefined;
+    this.creatingPlaceholder = false;
     this.startTyping();
   }
 
