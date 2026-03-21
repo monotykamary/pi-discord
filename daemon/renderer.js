@@ -180,6 +180,59 @@ export class DiscordRenderer {
     return { messageId: message.id, url: message.attachments.first()?.url };
   }
 
+  async uploadContentToThread(filename, content, lang, options = {}) {
+    // Ensure thread exists first (create if needed)
+    let thread = await this.ensureDetailsThread();
+    if (!thread && this.enableDetailsThreads) {
+      // Need to create thread - MUST use indicator as anchor, never text messages
+      if (!this.toolIndicatorMessageId) {
+        await this.showToolIndicator();
+      }
+      const threadAnchorId = this.toolIndicatorMessageId;
+      if (threadAnchorId) {
+        try {
+          const channel = await this.getTargetChannel();
+          if ("messages" in channel) {
+            const message = await channel.messages.fetch(threadAnchorId);
+            if (typeof message.startThread === "function") {
+              thread = await message.startThread({
+                name: "Tool calls",
+                autoArchiveDuration: 60,
+              });
+              this.manifest.detailsThreadId = thread.id;
+              await this.logger.info("tool-thread-created-for-content", { 
+                routeKey: this.manifest.routeKey, 
+                threadId: thread.id 
+              });
+            }
+          }
+        } catch (err) {
+          await this.logger.warn("tool-thread-create-for-content-failed", { error: String(err) });
+        }
+      }
+    }
+    
+    const payload = {
+      content: options.title ?? `\`\`\`${lang}\n${filename}\n\`\`\``, 
+      files: [new AttachmentBuilder(Buffer.from(content), { name: filename })],
+      allowedMentions: { parse: [] },
+    };
+    
+    if (thread && "send" in thread) {
+      try {
+        const message = await thread.send(payload);
+        return { messageId: message.id, url: message.attachments.first()?.url };
+      } catch (error) {
+        await this.clearDetailsThread("details-thread-content-upload-failed", error);
+      }
+    }
+    
+    // Fallback to channel
+    const channel = await this.getTargetChannel();
+    const message = await channel.send(payload);
+    return { messageId: message.id, url: message.attachments.first()?.url };
+  }
+
   async postDetail(content, { fallbackToChannel = true } = {}) {
     const payload = { content: content.slice(0, DISCORD_MESSAGE_LIMIT), allowedMentions: { parse: [] } };
     const thread = await this.ensureDetailsThread();
@@ -253,16 +306,40 @@ export class DiscordRenderer {
       this.enqueueToolOperation(async () => {
         const toolDisplay = `🛠️ **${event.toolName}**`;
         
-        // Handle large JSON results as file uploads
+        // Extract content from tool result
         if (event.result) {
-          const resultJson = JSON.stringify(event.result, null, 2);
-          if (resultJson.length > 1000) {
-            await this.uploadJsonToThread(`${event.toolName}-result.json`, resultJson, {
-              title: toolDisplay
-            });
+          const { content, filename, isDiff } = this.extractToolContent(event);
+          
+          if (content) {
+            // Determine file extension based on tool type or filename
+            let ext = filename ? filename.split('.').pop() : 'txt';
+            if (event.toolName === 'read' && !filename) ext = 'txt';
+            if (isDiff) ext = 'diff';
+            
+            // Create display filename
+            const displayFilename = filename || `${event.toolName}-result.${ext}`;
+            
+            if (content.length > 1000) {
+              // Upload as file attachment
+              await this.uploadContentToThread(displayFilename, content, ext, {
+                title: toolDisplay
+              });
+            } else {
+              // Wrap in appropriate codeblock
+              const resultDisplay = `\n\`\`\`${ext}\n${content}\n\`\`\``;
+              await this.postToolDetail(`${toolDisplay}${resultDisplay}`);
+            }
           } else {
-            const resultDisplay = `\n\`\`\`json\n${resultJson}\n\`\`\``;
-            await this.postToolDetail(`${toolDisplay}${resultDisplay}`);
+            // Fallback to JSON if no content extracted
+            const resultJson = JSON.stringify(event.result, null, 2);
+            if (resultJson.length > 1000) {
+              await this.uploadContentToThread(`${event.toolName}-result.json`, resultJson, 'json', {
+                title: toolDisplay
+              });
+            } else {
+              const resultDisplay = `\n\`\`\`json\n${resultJson}\n\`\`\``;
+              await this.postToolDetail(`${toolDisplay}${resultDisplay}`);
+            }
           }
         } else {
           await this.postToolDetail(toolDisplay);
@@ -274,6 +351,62 @@ export class DiscordRenderer {
         }
       });
     }
+  }
+
+  /**
+   * Extract readable content from tool result
+   * Returns { content, filename, isDiff }
+   */
+  extractToolContent(event) {
+    const result = event.result;
+    if (!result) return { content: null, filename: null, isDiff: false };
+    
+    // Handle read tool - extract file content
+    if (event.toolName === 'read' && result.content) {
+      // SDK returns content as array of blocks
+      if (Array.isArray(result.content)) {
+        const textBlock = result.content.find(c => c.type === 'text');
+        if (textBlock && textBlock.text) {
+          return { 
+            content: textBlock.text, 
+            filename: result.filePath || result.path || result.filename,
+            isDiff: false 
+          };
+        }
+      }
+      // Direct content string
+      if (typeof result.content === 'string') {
+        return { 
+          content: result.content, 
+          filename: result.filePath || result.path || result.filename,
+          isDiff: false 
+        };
+      }
+    }
+    
+    // Handle diff/edit tools
+    if ((event.toolName === 'edit' || event.toolName === 'apply_diff' || event.toolName === 'str_replace') && result.diff) {
+      return { 
+        content: result.diff, 
+        filename: result.filePath || result.path,
+        isDiff: true 
+      };
+    }
+    
+    // Handle other tools - try to find any readable content
+    if (result.content) {
+      if (Array.isArray(result.content)) {
+        const textBlock = result.content.find(c => c.type === 'text');
+        if (textBlock && textBlock.text) {
+          return { content: textBlock.text, filename: null, isDiff: false };
+        }
+      }
+      if (typeof result.content === 'string') {
+        return { content: result.content, filename: null, isDiff: false };
+      }
+    }
+    
+    return { content: null, filename: null, isDiff: false };
   }
 
   async sendIncrementalResponse() {
@@ -509,27 +642,9 @@ export class DiscordRenderer {
   }
 
   async hideToolIndicator() {
-    if (!this.toolIndicatorMessageId) return;
-    
-    try {
-      const channel = await this.getTargetChannel();
-      if ("messages" in channel) {
-        const message = await channel.messages.fetch(this.toolIndicatorMessageId);
-        if (message) {
-          // Edit to show completion instead of deleting
-          await message.edit({ content: "✅ Tools finished" });
-        }
-      }
-      this.toolIndicatorMessageId = undefined;
-      this.creatingIndicator = false;
-      await this.logger.info("tool-indicator-hidden", { 
-        routeKey: this.manifest.routeKey 
-      });
-    } catch (err) {
-      // Ignore errors - message may already be gone
-      this.toolIndicatorMessageId = undefined;
-      this.creatingIndicator = false;
-    }
+    // Just clear the tracking - don't edit the message
+    this.toolIndicatorMessageId = undefined;
+    this.creatingIndicator = false;
   }
 
   async renderQueued(item) {

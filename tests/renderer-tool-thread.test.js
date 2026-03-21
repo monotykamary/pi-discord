@@ -154,23 +154,11 @@ test("hideToolIndicator edits message to show completion", async () => {
   await renderer.showToolIndicator();
   const indicatorId = renderer.toolIndicatorMessageId;
   
-  // Mock edit function on the indicator message
-  let editedContent = null;
-  const mockMessage = {
-    id: indicatorId,
-    edit: async (payload) => {
-      editedContent = payload.content;
-    },
-  };
-  
-  // Update the mock channel's messages.fetch to return our mock message
-  const mockChannel = await mockClient.channels.fetch();
-  mockChannel.messages.fetch = async () => mockMessage;
-  
+  // Hide the indicator (should just clear tracking, not edit message)
   await renderer.hideToolIndicator();
   
-  assert.equal(editedContent, "✅ Tools finished", "Should edit to show completion");
   assert.equal(renderer.toolIndicatorMessageId, undefined, "Should clear indicator ID");
+  // Note: We no longer edit the message - it stays as "🛠️ Using tools..."
 });
 
 test("postToolDetail creates thread from indicator and posts tool details", async () => {
