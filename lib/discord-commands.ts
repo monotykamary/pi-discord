@@ -1,10 +1,7 @@
 import { REST, Routes, SlashCommandBuilder } from "discord.js";
+import type { PiDiscordConfig } from "./config.js";
 
-/**
- * Builds the Discord slash command definitions.
- * @param {import('./config.js').PiDiscordConfig} config
- */
-export function buildSlashCommands(config) {
+export function buildSlashCommands(config: PiDiscordConfig) {
   return [
     new SlashCommandBuilder()
       .setName(config.commandName)
@@ -21,11 +18,13 @@ export function buildSlashCommands(config) {
   ].map((command) => command.toJSON());
 }
 
-/**
- * Registers Discord slash commands.
- * @param {import('./config.js').PiDiscordConfig} config
- */
-export async function syncSlashCommands(config) {
+export interface SyncResult {
+  scope: "global" | "guild";
+  count: number;
+  guildIds?: string[];
+}
+
+export async function syncSlashCommands(config: PiDiscordConfig): Promise<SyncResult> {
   const rest = new REST({ version: "10" }).setToken(config.botToken);
   const body = buildSlashCommands(config);
 

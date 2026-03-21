@@ -5,11 +5,40 @@ import { sanitizeSegment } from "./fs.js";
 
 const packageRoot = path.dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
 
-/**
- * Resolves all package and runtime paths.
- * @param {{ agentDir?: string, workspaceDir?: string }} [options]
- */
-export function getPaths(options = {}) {
+export interface PathsOptions {
+  agentDir?: string;
+  workspaceDir?: string;
+}
+
+export interface Paths {
+  packageRoot: string;
+  agentDir: string;
+  workspaceDir: string;
+  configPath: string;
+  runDir: string;
+  logsDir: string;
+  routesDir: string;
+  routeWorkspacesDir: string;
+  daemonLogPath: string;
+  statusPath: string;
+  pidPath: string;
+  lockPath: string;
+  registryPath: string;
+  daemonEntry: string;
+}
+
+export interface RoutePaths {
+  routeDir: string;
+  manifestPath: string;
+  queuePath: string;
+  journalPath: string;
+  sessionsDir: string;
+  inboundAttachmentsDir: string;
+  dedicatedExecutionRoot: string;
+  sharedMemoryPath: string;
+}
+
+export function getPaths(options: PathsOptions = {}): Paths {
   const agentDir = options.agentDir ?? path.join(homedir(), ".pi", "agent");
   const workspaceDir = options.workspaceDir ?? path.join(agentDir, "pi-discord");
   return {
@@ -30,12 +59,7 @@ export function getPaths(options = {}) {
   };
 }
 
-/**
- * Resolves per-route paths.
- * @param {ReturnType<typeof getPaths>} paths
- * @param {string} routeKey
- */
-export function getRoutePaths(paths, routeKey) {
+export function getRoutePaths(paths: Paths, routeKey: string): RoutePaths {
   const routeSlug = sanitizeSegment(routeKey);
   const routeDir = path.join(paths.routesDir, routeSlug);
   return {

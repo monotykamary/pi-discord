@@ -1,8 +1,16 @@
-/**
- * @param {import('discord.js').Message | import('discord.js').ChatInputCommandInteraction | import('discord.js').ButtonInteraction} subject
- * @param {import('../lib/config.js').PiDiscordConfig} config
- */
-export function authorizeInteraction(subject, config) {
+import type { Message, ChatInputCommandInteraction, ButtonInteraction } from "discord.js";
+import type { PiDiscordConfig } from "../lib/config.js";
+
+export interface AuthorizationResult {
+  allowed: boolean;
+  canControl?: boolean;
+  reason?: string;
+}
+
+export function authorizeInteraction(
+  subject: Message | ChatInputCommandInteraction | ButtonInteraction,
+  config: PiDiscordConfig,
+): AuthorizationResult {
   const guildId = "guildId" in subject ? subject.guildId ?? null : null;
   const userId = getUserId(subject);
 
@@ -27,9 +35,6 @@ export function authorizeInteraction(subject, config) {
   };
 }
 
-/**
- * @param {import('discord.js').Message | import('discord.js').ChatInputCommandInteraction | import('discord.js').ButtonInteraction} subject
- */
-function getUserId(subject) {
-  return subject.author?.id ?? subject.user?.id;
+function getUserId(subject: Message | ChatInputCommandInteraction | ButtonInteraction): string | undefined {
+  return (subject as Message).author?.id ?? (subject as ChatInputCommandInteraction | ButtonInteraction).user?.id;
 }

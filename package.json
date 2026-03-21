@@ -7,16 +7,23 @@
     "pi-discord-daemon": "./bin/pi-discord-daemon.mjs"
   },
   "scripts": {
-    "test": "node --test"
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
   },
   "pi": {
     "extensions": [
-      "./index.js"
+      "./index.ts"
     ]
   },
   "dependencies": {
     "@mariozechner/pi-coding-agent": "^0.57.1",
     "@sinclair/typebox": "^0.34.41",
     "discord.js": "^14.25.1"
+  },
+  "devDependencies": {
+    "@types/node": "^25.3.3",
+    "typescript": "^5.8.2",
+    "vitest": "^2.1.8"
   }
 }

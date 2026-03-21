@@ -1,80 +1,87 @@
 import path from "node:path";
-import { CONFIG_VERSION, DEFAULT_COMMAND_NAME, DEFAULT_GLOBAL_CONCURRENCY, DEFAULT_PRIMARY_FLUSH_MS, DEFAULT_QUEUE_LEASE_MS } from "./constants.js";
+import {
+  CONFIG_VERSION,
+  DEFAULT_COMMAND_NAME,
+  DEFAULT_GLOBAL_CONCURRENCY,
+  DEFAULT_PRIMARY_FLUSH_MS,
+  DEFAULT_QUEUE_LEASE_MS,
+} from "./constants.js";
 import { ensureDir, readJson, writeJson } from "./fs.js";
+import type { Paths } from "./paths.js";
 
 const THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh"]);
 
-function toStringArray(value) {
+function toStringArray(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return [...new Set(
     value
-      .filter((entry) => typeof entry === "string")
+      .filter((entry): entry is string => typeof entry === "string")
       .map((entry) => entry.trim())
       .filter(Boolean),
   )];
 }
 
-function normalizeOptionalString(value) {
+function normalizeOptionalString(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
   const normalized = value.trim();
   return normalized || undefined;
 }
 
-function normalizeRouteOverrides(value) {
+interface RouteOverrideInput {
+  executionRoot?: string;
+  mode?: "shared" | "dedicated";
+  [key: string]: unknown;
+}
+
+function normalizeRouteOverrides(value: unknown): Record<string, DiscordRouteOverride> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return {};
   }
 
-  const normalized = {};
+  const normalized: Record<string, DiscordRouteOverride> = {};
   for (const [routeKey, override] of Object.entries(value)) {
-    if (!override || typeof override !== "object" || Array.isArray(override)) continue;
-    const executionRoot = normalizeOptionalString(override.executionRoot);
-    const mode = override.mode === "shared" || override.mode === "dedicated" ? override.mode : undefined;
+    const ovr = override as RouteOverrideInput;
+    if (!ovr || typeof ovr !== "object" || Array.isArray(ovr)) continue;
+    const executionRoot = normalizeOptionalString(ovr.executionRoot);
+    const mode = ovr.mode === "shared" || ovr.mode === "dedicated" ? ovr.mode : undefined;
     if (!executionRoot && !mode) continue;
     normalized[routeKey] = { executionRoot, mode };
   }
   return normalized;
 }
 
-/**
- * @typedef {Object} DiscordRouteOverride
- * @property {string | undefined} [executionRoot]
- * @property {"dedicated" | "shared" | undefined} [mode]
- */
+export interface DiscordRouteOverride {
+  executionRoot?: string;
+  mode?: "dedicated" | "shared";
+}
 
-/**
- * @typedef {Object} PiDiscordConfig
- * @property {number} version
- * @property {string} botToken
- * @property {string} applicationId
- * @property {string[]} allowedGuildIds
- * @property {string[]} adminUserIds
- * @property {string[]} dmAllowlistUserIds
- * @property {string} commandName
- * @property {boolean} registerCommandsGlobally
- * @property {boolean} syncCommandsOnStart
- * @property {"dedicated" | "shared"} workspaceMode
- * @property {string | undefined} sharedExecutionRoot
- * @property {Record<string, DiscordRouteOverride>} routeOverrides
- * @property {boolean} allowProjectExtensions
- * @property {boolean} enableImageInput
- * @property {boolean} enableDetailsThreads
- * @property {number} globalConcurrency
- * @property {number} queueLeaseMs
- * @property {number} primaryFlushMs
- * @property {string | undefined} defaultModel
- * @property {"off" | "minimal" | "low" | "medium" | "high" | "xhigh"} defaultThinkingLevel
- * @property {string[]} triggerWords
- * @property {boolean} triggerWarmOnly
- * @property {number} hotZoneMinutes
- */
+export interface PiDiscordConfig {
+  version: number;
+  botToken: string;
+  applicationId: string;
+  allowedGuildIds: string[];
+  adminUserIds: string[];
+  dmAllowlistUserIds: string[];
+  commandName: string;
+  registerCommandsGlobally: boolean;
+  syncCommandsOnStart: boolean;
+  workspaceMode: "dedicated" | "shared";
+  sharedExecutionRoot?: string;
+  routeOverrides: Record<string, DiscordRouteOverride>;
+  allowProjectExtensions: boolean;
+  enableImageInput: boolean;
+  enableDetailsThreads: boolean;
+  globalConcurrency: number;
+  queueLeaseMs: number;
+  primaryFlushMs: number;
+  defaultModel?: string;
+  defaultThinkingLevel: "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+  triggerWords: string[];
+  triggerWarmOnly: boolean;
+  hotZoneMinutes: number;
+}
 
-/**
- * Builds the default config.
- * @param {ReturnType<import('./paths.js').getPaths>} paths
- * @returns {PiDiscordConfig}
- */
-export function createDefaultConfig(paths) {
+export function createDefaultConfig(paths: Paths): PiDiscordConfig {
   return {
     version: CONFIG_VERSION,
     botToken: "",
@@ -102,13 +109,34 @@ export function createDefaultConfig(paths) {
   };
 }
 
-/**
- * Normalizes an arbitrary config object into the supported shape.
- * @param {ReturnType<import('./paths.js').getPaths>} paths
- * @param {Record<string, unknown>} loaded
- * @returns {PiDiscordConfig}
- */
-export function normalizeConfig(paths, loaded) {
+interface ConfigInput {
+  version?: number;
+  botToken?: string;
+  applicationId?: string;
+  allowedGuildIds?: unknown;
+  adminUserIds?: unknown;
+  dmAllowlistUserIds?: unknown;
+  commandName?: string;
+  registerCommandsGlobally?: boolean;
+  syncCommandsOnStart?: boolean;
+  workspaceMode?: "shared" | "dedicated";
+  sharedExecutionRoot?: string;
+  routeOverrides?: unknown;
+  allowProjectExtensions?: boolean;
+  enableImageInput?: boolean;
+  enableDetailsThreads?: boolean;
+  globalConcurrency?: number;
+  queueLeaseMs?: number;
+  primaryFlushMs?: number;
+  defaultModel?: string;
+  defaultThinkingLevel?: string;
+  triggerWords?: unknown;
+  triggerWarmOnly?: boolean;
+  hotZoneMinutes?: number;
+  [key: string]: unknown;
+}
+
+export function normalizeConfig(paths: Paths, loaded: ConfigInput): PiDiscordConfig {
   const fallback = createDefaultConfig(paths);
   const input = loaded && typeof loaded === "object" && !Array.isArray(loaded) ? loaded : {};
   return {
@@ -132,7 +160,7 @@ export function normalizeConfig(paths, loaded) {
     primaryFlushMs: typeof input.primaryFlushMs === "number" ? input.primaryFlushMs : fallback.primaryFlushMs,
     defaultModel: normalizeOptionalString(input.defaultModel) ?? fallback.defaultModel,
     defaultThinkingLevel: typeof input.defaultThinkingLevel === "string" && THINKING_LEVELS.has(input.defaultThinkingLevel)
-      ? input.defaultThinkingLevel
+      ? (input.defaultThinkingLevel as PiDiscordConfig["defaultThinkingLevel"])
       : fallback.defaultThinkingLevel,
     triggerWords: toStringArray(input.triggerWords).length > 0 ? toStringArray(input.triggerWords) : fallback.triggerWords,
     triggerWarmOnly: typeof input.triggerWarmOnly === "boolean" ? input.triggerWarmOnly : fallback.triggerWarmOnly,
@@ -142,33 +170,24 @@ export function normalizeConfig(paths, loaded) {
   };
 }
 
-/**
- * Loads config from disk and applies normalization.
- * @param {ReturnType<import('./paths.js').getPaths>} paths
- * @returns {Promise<PiDiscordConfig>}
- */
-export async function loadConfig(paths) {
-  const loaded = await readJson(paths.configPath, {});
+export async function loadConfig(paths: Paths): Promise<PiDiscordConfig> {
+  const loaded = await readJson<ConfigInput>(paths.configPath, {});
   return normalizeConfig(paths, loaded);
 }
 
-/**
- * Persists config to disk.
- * @param {ReturnType<import('./paths.js').getPaths>} paths
- * @param {PiDiscordConfig} config
- */
-export async function saveConfig(paths, config) {
+export async function saveConfig(paths: Paths, config: PiDiscordConfig): Promise<void> {
   await ensureDir(paths.workspaceDir);
   await writeJson(paths.configPath, normalizeConfig(paths, config));
 }
 
-/**
- * Validates config and returns human-readable issues.
- * @param {PiDiscordConfig} config
- */
-export function validateConfig(config) {
-  const errors = [];
-  const warnings = [];
+export interface ValidationResult {
+  errors: string[];
+  warnings: string[];
+}
+
+export function validateConfig(config: PiDiscordConfig): ValidationResult {
+  const errors: string[] = [];
+  const warnings: string[] = [];
 
   if (!config.botToken) errors.push("Missing `botToken`.");
   if (!config.applicationId) errors.push("Missing `applicationId`.");

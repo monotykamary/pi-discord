@@ -1,20 +1,20 @@
 import { Type } from "@sinclair/typebox";
+import type { Pi } from "@mariozechner/pi-coding-agent";
 
-/**
- * @param {{
- *   getInjectedContext: () => Promise<string>,
- *   uploadFile: (filePath: string, options?: { title?: string }) => Promise<{ messageId: string, url?: string }>
- * }} runtime
- */
-export function createRouteSessionExtension(runtime) {
-  return (pi) => {
+export interface RuntimeInterface {
+  getInjectedContext: () => Promise<string>;
+  uploadFile: (filePath: string, options?: { title?: string }) => Promise<{ messageId: string; url?: string }>;
+}
+
+export function createRouteSessionExtension(runtime: RuntimeInterface) {
+  return (pi: Pi) => {
     pi.on("context", async (event) => {
       const injectedText = await runtime.getInjectedContext();
       if (!injectedText.trim()) return undefined;
       return {
         messages: [
           {
-            role: "user",
+            role: "user" as const,
             content: `Discord route context:\n\n${injectedText}`,
             timestamp: Date.now(),
           },
@@ -35,10 +35,10 @@ export function createRouteSessionExtension(runtime) {
         path: Type.String({ description: "Local file path to upload" }),
         title: Type.Optional(Type.String({ description: "Optional message title" })),
       }),
-      async execute(_toolCallId, params) {
+      async execute(_toolCallId: string, params: { path: string; title?: string }) {
         const result = await runtime.uploadFile(params.path, { title: params.title });
         return {
-          content: [{ type: "text", text: `Uploaded ${params.path} to Discord.` }],
+          content: [{ type: "text" as const, text: `Uploaded ${params.path} to Discord.` }],
           details: result,
         };
       },

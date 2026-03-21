@@ -1,8 +1,9 @@
 import { spawn } from "node:child_process";
 import { readFile, writeFile } from "node:fs/promises";
 import { ensureDir, tailFile } from "./fs.js";
+import type { Paths } from "./paths.js";
 
-async function readJsonFile(filePath) {
+async function readJsonFile(filePath: string): Promise<unknown> {
   try {
     return JSON.parse(await readFile(filePath, "utf8"));
   } catch {
@@ -10,7 +11,7 @@ async function readJsonFile(filePath) {
   }
 }
 
-async function readNumericFile(filePath) {
+async function readNumericFile(filePath: string): Promise<number | undefined> {
   try {
     const value = Number((await readFile(filePath, "utf8")).trim());
     return Number.isInteger(value) && value > 0 ? value : undefined;
@@ -19,7 +20,7 @@ async function readNumericFile(filePath) {
   }
 }
 
-function isProcessAlive(pid) {
+function isProcessAlive(pid: number): boolean {
   if (!pid) return false;
   try {
     process.kill(pid, 0);
@@ -29,21 +30,24 @@ function isProcessAlive(pid) {
   }
 }
 
-/**
- * @param {ReturnType<import('./paths.js').getPaths>} paths
- */
-export async function readDaemonStatus(paths) {
+export interface DaemonStatus {
+  running: boolean;
+  pid?: number;
+  status?: unknown;
+}
+
+export async function readDaemonStatus(paths: Paths): Promise<DaemonStatus> {
   const [pidFilePid, lockState, status] = await Promise.all([
     readNumericFile(paths.pidPath),
-    readJsonFile(paths.lockPath),
-    readJsonFile(paths.statusPath),
+    readJsonFile(paths.lockPath) as Promise<{ pid?: number } | undefined>,
+    readJsonFile(paths.statusPath) as Promise<{ pid?: number } | undefined>,
   ]);
 
   const candidates = [
     typeof lockState?.pid === "number" ? lockState.pid : undefined,
     typeof status?.pid === "number" ? status.pid : undefined,
     pidFilePid,
-  ].filter((pid) => Number.isInteger(pid) && pid > 0);
+  ].filter((pid): pid is number => Number.isInteger(pid) && pid !== undefined && pid > 0);
 
   const livePid = candidates.find((pid) => isProcessAlive(pid));
   return {
@@ -53,10 +57,13 @@ export async function readDaemonStatus(paths) {
   };
 }
 
-/**
- * @param {ReturnType<import('./paths.js').getPaths>} paths
- */
-export async function startDaemon(paths) {
+export interface StartResult {
+  started: boolean;
+  pid?: number;
+  reason?: string;
+}
+
+export async function startDaemon(paths: Paths): Promise<StartResult> {
   const state = await readDaemonStatus(paths);
   if (state.running) {
     return { started: false, reason: `Daemon already running as pid ${state.pid}.` };
@@ -74,10 +81,13 @@ export async function startDaemon(paths) {
   return { started: true, pid: child.pid };
 }
 
-/**
- * @param {ReturnType<import('./paths.js').getPaths>} paths
- */
-export async function stopDaemon(paths) {
+export interface StopResult {
+  stopped: boolean;
+  pid?: number;
+  reason?: string;
+}
+
+export async function stopDaemon(paths: Paths): Promise<StopResult> {
   const state = await readDaemonStatus(paths);
   if (!state.running || !state.pid) {
     return { stopped: false, reason: "Daemon is not running." };
@@ -85,16 +95,12 @@ export async function stopDaemon(paths) {
   try {
     process.kill(state.pid, "SIGTERM");
     return { stopped: true, pid: state.pid };
-  } catch (error) {
+  } catch (error: any) {
     if (error?.code === "ESRCH") return { stopped: false, reason: "Daemon is no longer running." };
     throw error;
   }
 }
 
-/**
- * @param {ReturnType<import('./paths.js').getPaths>} paths
- * @param {number} [lines]
- */
-export async function readDaemonLogs(paths, lines = 80) {
+export async function readDaemonLogs(paths: Paths, lines: number = 80): Promise<string> {
   return tailFile(paths.daemonLogPath, lines);
 }
