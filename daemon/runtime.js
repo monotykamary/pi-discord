@@ -443,8 +443,7 @@ export class PiDiscordDaemon {
     });
 
     const reply = await message.reply({
-      content: `Queued for <@${message.author.id}>`,
-      components: route.renderer.createStopRow(),
+      content: "*Thinking...*",
       allowedMentions: { parse: [], repliedUser: false },
     });
     route.manifest.primaryMessageId = reply.id;
@@ -586,8 +585,7 @@ export class PiDiscordDaemon {
 
     await interaction.deferReply({ ephemeral: false });
     const reply = await interaction.editReply({
-      content: `Queued for <@${interaction.user.id}>`,
-      components: route.renderer.createStopRow(),
+      content: "*Thinking...*",
       allowedMentions: { parse: [] },
     });
     route.manifest.primaryMessageId = reply.id;

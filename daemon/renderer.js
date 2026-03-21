@@ -1,5 +1,5 @@
 import { basename } from "node:path";
-import { AttachmentBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType } from "discord.js";
+import { AttachmentBuilder, ChannelType } from "discord.js";
 import { DISCORD_MESSAGE_LIMIT } from "../lib/constants.js";
 
 export function splitDiscordText(text) {
@@ -80,7 +80,6 @@ export class DiscordRenderer {
 
     const message = await channel.send({
       content: fallbackText,
-      components: this.createStopRow(),
       allowedMentions: { parse: [] },
     });
     this.manifest.primaryMessageId = message.id;
@@ -88,16 +87,15 @@ export class DiscordRenderer {
     return message;
   }
 
-  async updatePrimary(content, { keepStop = true } = {}) {
+  async updatePrimary(content) {
     const message = await this.ensurePrimaryMessage(content);
     const chunks = splitDiscordText(content);
-    const primaryContent = keepStop && chunks.length > 1
+    const primaryContent = chunks.length > 1
       ? `${chunks[0]}\n\n[Output truncated while streaming. Full response will be posted when the run finishes.]`
       : chunks[0];
 
     await message.edit({
       content: primaryContent,
-      components: keepStop ? this.createStopRow() : [],
       allowedMentions: { parse: [] },
     });
     await this.persistManifest();
@@ -115,7 +113,7 @@ export class DiscordRenderer {
     this.flushTimer = setTimeout(() => {
       this.flushTimer = undefined;
       this.runInBackground("primary-update-failed", async () => {
-        await this.updatePrimary("*Thinking...*", { keepStop: true });
+        await this.updatePrimary("*Thinking...*");
       });
     }, this.flushMs);
   }
@@ -262,7 +260,7 @@ export class DiscordRenderer {
       this.flushTimer = undefined;
     }
     this.stopTyping();
-    await this.updatePrimary(this.currentAssistantText || "Done.", { keepStop: false });
+    await this.updatePrimary(this.currentAssistantText || "Done.");
   }
 
   async renderCancelled(reason = "Stopped.") {
@@ -271,7 +269,7 @@ export class DiscordRenderer {
       this.flushTimer = undefined;
     }
     this.stopTyping();
-    await this.updatePrimary(`*${reason}*`, { keepStop: false });
+    await this.updatePrimary(`*${reason}*`);
   }
 
   async renderFailure(error) {
@@ -280,6 +278,6 @@ export class DiscordRenderer {
       this.flushTimer = undefined;
     }
     this.stopTyping();
-    await this.updatePrimary(`**Error:** ${String(error).slice(0, 1800)}`, { keepStop: false });
+    await this.updatePrimary(`**Error:** ${String(error).slice(0, 1800)}`);
   }
 }
