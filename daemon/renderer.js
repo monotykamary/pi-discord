@@ -36,7 +36,8 @@ export class DiscordRenderer {
     this.currentAssistantText = "";
     this.typingInterval = undefined;
     this.lastMessageId = undefined;
-    this.lastSentIndex = 0; // Track how much was already sent to prevent duplicates
+    this.lastSentIndex = 0;
+    this.sendingLock = false; // Prevent concurrent sendIncrementalResponse calls
   }
 
   runInBackground(label, task) {
@@ -147,39 +148,45 @@ export class DiscordRenderer {
   }
 
   async sendIncrementalResponse() {
-    const fullText = this.currentAssistantText;
-    const unsentText = fullText.slice(this.lastSentIndex).trimStart();
-    
-    if (!unsentText || unsentText.length < 20) return;
-    
-    // Only send on paragraph breaks or clear sentence endings
-    const hasParagraphBreak = unsentText.includes('\n\n');
-    const endsWithSentence = /[.!?]\s*$/.test(unsentText);
-    const inCodeBlock = (fullText.match(/```/g) || []).length % 2 === 1;
-    
-    if (!hasParagraphBreak && !endsWithSentence) return;
-    if (inCodeBlock) return;
-    
-    // Find break point in unsent portion only
-    let sendLength = unsentText.length;
-    if (hasParagraphBreak) {
-      const breakIndex = unsentText.indexOf('\n\n');
-      if (breakIndex > 0) sendLength = breakIndex + 2;
-    } else if (endsWithSentence) {
-      const matches = unsentText.match(/.*[.!?]\s*/s);
-      if (matches) sendLength = matches[0].length;
-    }
-    
-    const toSend = unsentText.slice(0, sendLength).trim();
-    if (!toSend || toSend.length < 10) return;
+    // Prevent concurrent execution - multiple text deltas can arrive while awaiting send
+    if (this.sendingLock) return;
+    this.sendingLock = true;
     
     try {
+      const fullText = this.currentAssistantText;
+      const unsentText = fullText.slice(this.lastSentIndex).trimStart();
+      
+      if (!unsentText || unsentText.length < 20) return;
+      
+      // Only send on paragraph breaks or clear sentence endings
+      const hasParagraphBreak = unsentText.includes('\n\n');
+      const endsWithSentence = /[.!?]\s*$/.test(unsentText);
+      const inCodeBlock = (fullText.match(/```/g) || []).length % 2 === 1;
+      
+      if (!hasParagraphBreak && !endsWithSentence) return;
+      if (inCodeBlock) return;
+      
+      // Find break point in unsent portion only
+      let sendLength = unsentText.length;
+      if (hasParagraphBreak) {
+        const breakIndex = unsentText.indexOf('\n\n');
+        if (breakIndex > 0) sendLength = breakIndex + 2;
+      } else if (endsWithSentence) {
+        const matches = unsentText.match(/.*[.!?]\s*/s);
+        if (matches) sendLength = matches[0].length;
+      }
+      
+      const toSend = unsentText.slice(0, sendLength).trim();
+      if (!toSend || toSend.length < 10) return;
+      
       const channel = await this.getTargetChannel();
       const message = await channel.send({ content: toSend.slice(0, DISCORD_MESSAGE_LIMIT), allowedMentions: { parse: [] } });
       this.lastMessageId = message.id;
       this.lastSentIndex += sendLength;
     } catch {
       // Ignore send errors
+    } finally {
+      this.sendingLock = false;
     }
   }
 
