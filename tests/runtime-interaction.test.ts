@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import path from "node:path";
 import os from "node:os";
 import { mkdtemp } from "node:fs/promises";
+import type { ChatInputCommandInteraction, ButtonInteraction, Channel } from "discord.js";
 import { PiDiscordDaemon } from "../daemon/runtime.js";
 import { getPaths } from "../lib/paths.js";
 import { createDefaultConfig } from "../lib/config.js";
@@ -18,6 +19,47 @@ function createDaemon() {
   });
 }
 
+function createMockButtonInteraction(options: {
+  guildId?: string;
+  channelId?: string;
+  userId: string;
+  customId: string;
+  isThread?: boolean;
+}): ButtonInteraction {
+  return {
+    guildId: options.guildId ?? null,
+    channelId: options.channelId ?? null,
+    user: { id: options.userId },
+    customId: options.customId,
+    channel: {
+      isThread: () => options.isThread ?? false,
+    } as Channel,
+    isButton: () => true,
+    isChatInputCommand: () => false,
+  } as ButtonInteraction;
+}
+
+function createMockSlashInteraction(options: {
+  guildId?: string;
+  channelId?: string;
+  userId: string;
+  commandName: string;
+}): ChatInputCommandInteraction {
+  return {
+    guildId: options.guildId ?? null,
+    channelId: options.channelId ?? null,
+    user: { id: options.userId },
+    commandName: options.commandName,
+    channel: { isThread: () => false } as Channel,
+    isButton: () => false,
+    isChatInputCommand: () => true,
+    isRepliable: () => true,
+    options: {
+      getSubcommand: () => null,
+    },
+  } as ChatInputCommandInteraction;
+}
+
 test("handleInteraction ignores unrelated button ids", async () => {
   const daemon = await createDaemon();
   let abortCalls = 0;
@@ -28,15 +70,15 @@ test("handleInteraction ignores unrelated button ids", async () => {
 
   let replyCalls = 0;
   await daemon.handleInteraction({
-    guildId: "g1",
-    user: { id: "u1" },
-    customId: "other:stop:g1__c1__root",
-    isButton: () => true,
-    isChatInputCommand: () => false,
+    ...createMockButtonInteraction({
+      guildId: "g1",
+      userId: "u1",
+      customId: "other:stop:g1__c1__root",
+    }),
     reply: async () => {
       replyCalls += 1;
     },
-  });
+  } as ButtonInteraction);
 
   assert.equal(abortCalls, 0);
   assert.equal(replyCalls, 0);
@@ -47,61 +89,60 @@ test("handleInteraction ignores unrelated button ids before auth checks", async 
   let replyCalls = 0;
 
   await daemon.handleInteraction({
-    guildId: "g9",
-    user: { id: "stranger" },
-    customId: "other:stop:g1__c1__root",
-    isButton: () => true,
-    isChatInputCommand: () => false,
+    ...createMockButtonInteraction({
+      guildId: "g9",
+      userId: "stranger",
+      customId: "other:stop:g1__c1__root",
+    }),
     reply: async () => {
       replyCalls += 1;
     },
-  });
+  } as ButtonInteraction);
 
   assert.equal(replyCalls, 0);
 });
 
 test("handleInteraction handles pi-discord stop buttons", async () => {
   const daemon = await createDaemon();
-  let abortedRouteKey;
-  daemon.abortRoute = async (routeKey) => {
+  let abortedRouteKey: string | undefined;
+  daemon.abortRoute = async (routeKey: string) => {
     abortedRouteKey = routeKey;
     return true;
   };
 
-  let replyPayload;
+  let replyPayload: { content?: string; ephemeral?: boolean } | undefined;
   await daemon.handleInteraction({
-    guildId: "g1",
-    channelId: "c1",
-    channel: { isThread: () => false },
-    user: { id: "u1" },
-    customId: "pi-discord:stop:g1__c1__root",
-    isButton: () => true,
-    isChatInputCommand: () => false,
-    reply: async (payload) => {
+    ...createMockButtonInteraction({
+      guildId: "g1",
+      channelId: "c1",
+      userId: "u1",
+      customId: "pi-discord:stop:g1__c1__root",
+    }),
+    reply: async (payload: { content?: string; ephemeral?: boolean }) => {
       replyPayload = payload;
     },
-  });
+  } as ButtonInteraction);
 
   assert.equal(abortedRouteKey, "g1__c1__root");
-  assert.equal(replyPayload.content, "Stop requested for <#c1>.");
-  assert.equal(replyPayload.ephemeral, true);
+  assert.equal(replyPayload?.content, "Stopped.");
+  assert.equal(replyPayload?.ephemeral, true);
 });
 
-test("handleInteraction ignores unrelated slash commands before auth checks", async () => {
+test("handleInteraction replies with auth error for unauthorized guild slash commands", async () => {
   const daemon = await createDaemon();
-  let replyCalls = 0;
+  let replyPayload: { content?: string; ephemeral?: boolean } | undefined;
 
   await daemon.handleInteraction({
-    guildId: "g9",
-    user: { id: "stranger" },
-    commandName: "other",
-    isButton: () => false,
-    isChatInputCommand: () => true,
-    isRepliable: () => true,
-    reply: async () => {
-      replyCalls += 1;
+    ...createMockSlashInteraction({
+      guildId: "g9",
+      userId: "stranger",
+      commandName: "other",
+    }),
+    reply: async (payload: { content?: string; ephemeral?: boolean }) => {
+      replyPayload = payload;
     },
-  });
+  } as ChatInputCommandInteraction);
 
-  assert.equal(replyCalls, 0);
+  assert.equal(replyPayload?.content, "Guild g9 is not allowlisted.");
+  assert.equal(replyPayload?.ephemeral, true);
 });

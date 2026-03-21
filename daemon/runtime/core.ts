@@ -1,5 +1,5 @@
 import path from "node:path";
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, writeFile, rm } from "node:fs/promises";
 import type { Client, Message, ChatInputCommandInteraction, ButtonInteraction, Channel, GuildTextBasedChannel } from "discord.js";
 import { Events } from "discord.js";
 import { authorizeInteraction } from "../authz.js";
@@ -376,6 +376,79 @@ export class PiDiscordDaemon {
         await interaction.reply({ content: "Unknown memory subcommand.", ephemeral: true });
         return;
       }
+
+      if (commandName === "reset") {
+        const subcommand = interaction.options.getSubcommand(false) ?? "soft";
+        
+        if (!authorization.canControl) {
+          await interaction.reply({ content: "Only admin Discord user ids may reset routes.", ephemeral: true });
+          return;
+        }
+
+        const guildId = interaction.guildId ?? null;
+        const channelId = interaction.channelId;
+        const channel = interaction.channel;
+        const scope = this.resolveScopeFromChannel(guildId, channelId, channel as Channel | null);
+        const routeKey = scope.routeKey;
+
+        // Stop any active run first
+        await this.abortRoute(routeKey);
+
+        // Get existing route or create to ensure we can reset it
+        const route = await this.getExistingRoute(scope);
+        if (!route) {
+          await interaction.reply({ content: "No active route to reset.", ephemeral: true });
+          return;
+        }
+
+        // Dispose the session host
+        await route.host.dispose();
+
+        // Clear the queue - cancel all queued/leased/running items
+        for (const item of route.queue.list()) {
+          if (item.state === "queued" || item.state === "leased") {
+            await route.queue.finish(item.id, "cancelled", "Cancelled by route reset.");
+          }
+        }
+
+        // Clear memory file
+        try {
+          await writeFile(route.manifest.memoryPath, "", "utf8");
+        } catch {
+          // Memory clear failed but continue
+        }
+
+        // Clear journal by removing the file and resetting in-memory state
+        const journalPath = route.routePaths.journalPath;
+        await removeIfExists(journalPath);
+        route.journal.entries = [];
+        // @ts-expect-error - accessing private field for reset
+        route.journal.sourceIds = new Set();
+
+        // Hard/factory reset: wipe workspace directory
+        if (subcommand === "hard" || subcommand === "factory") {
+          try {
+            await rm(route.routePaths.dedicatedExecutionRoot, { recursive: true, force: true });
+            await ensureDir(route.routePaths.dedicatedExecutionRoot);
+          } catch {
+            // Workspace wipe failed but continue
+          }
+        }
+
+        // Factory reset: also clear the manifest session reference
+        if (subcommand === "factory") {
+          route.manifest.sessionFile = undefined;
+          route.manifest.primaryMessageId = undefined;
+          route.manifest.detailsThreadId = undefined;
+          await this.registry.saveManifest(route.manifest);
+        }
+
+        // Remove from active contexts so next use recreates fresh
+        this.routeContexts.delete(routeKey);
+
+        await interaction.reply({ content: `Route reset (${subcommand}) complete.`, ephemeral: true });
+        return;
+      }
     }
   }
 
@@ -518,6 +591,7 @@ export class PiDiscordDaemon {
     const active = this.currentRuns.get(routeKey);
     if (active) {
       await active.abort();
+      this.currentRuns.delete(routeKey);
       return true;
     }
     return false;
