@@ -162,21 +162,28 @@ export class DiscordRenderer {
     }
     if (event.type === "tool_execution_start") {
       this.runInBackground("tool-post-failed", async () => {
-        // Always show "Using tools..." indicator as separate message or reaction
+        // Show indicator when tools are active
         await this.showToolIndicator();
-        // Include tool parameters if available for richer detail
-        const params = event.parameters ? JSON.stringify(event.parameters).slice(0, 100) : "";
-        const detail = params ? `${event.toolName}(${params}...)` : event.toolName;
-        await this.postToolDetail(`🛠️ **${detail}** starting...`);
+        // Don't post "starting" - only post results when done
       });
     }
     if (event.type === "tool_execution_end") {
       this.runInBackground("tool-post-failed", async () => {
-        // Include result summary if available
-        const result = event.result ? JSON.stringify(event.result).slice(0, 100) : "";
-        const detail = result ? ` → ${result}...` : "";
+        // Format result - wrap JSON in markdown file attachment or codeblock
+        let resultDisplay = "";
+        if (event.result) {
+          const resultJson = JSON.stringify(event.result, null, 2);
+          // If result is large, use file attachment (Discord allows up to 8MB)
+          if (resultJson.length > 1000) {
+            // Will handle as file upload
+            resultDisplay = "📄 (see attached result.json)";
+          } else {
+            // Wrap in collapsible details or codeblock
+            resultDisplay = `\n\`\`\`json\n${resultJson.slice(0, 1800)}\n\`\`\``;
+          }
+        }
         const status = event.isError ? " ❌ failed" : " ✅ done";
-        await this.postToolDetail(`**${event.toolName}**${status}${detail}`);
+        await this.postToolDetail(`**${event.toolName}**${status}${resultDisplay}`);
         // Decrement and remove indicator when all tools done
         this.pendingTools = Math.max(0, this.pendingTools - 1);
         if (this.pendingTools === 0) {
