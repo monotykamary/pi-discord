@@ -442,9 +442,12 @@ export class PiDiscordDaemon {
       savedAttachments,
     });
 
-    const reply = await message.reply({
+    // Start typing indicator FIRST, then send thinking message as new message (not reply)
+    await route.renderer.startTyping();
+    const channel = await this.client.channels.fetch(scope.threadId ?? scope.channelId);
+    const reply = await channel.send({
       content: "*Thinking...*",
-      allowedMentions: { parse: [], repliedUser: false },
+      allowedMentions: { parse: [] },
     });
     route.manifest.primaryMessageId = reply.id;
     await this.registry.saveManifest(route.manifest);
@@ -583,8 +586,13 @@ export class PiDiscordDaemon {
       savedAttachments: [],
     });
 
+    // Start typing first, then defer and send new message
+    await route.renderer.startTyping();
     await interaction.deferReply({ ephemeral: false });
-    const reply = await interaction.editReply({
+    // Delete the deferred reply and send a new message instead
+    await interaction.deleteReply();
+    const channel = await this.client.channels.fetch(scope.threadId ?? scope.channelId);
+    const reply = await channel.send({
       content: "*Thinking...*",
       allowedMentions: { parse: [] },
     });
