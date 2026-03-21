@@ -1,3 +1,4 @@
+// @ts-nocheck
 import test from "node:test";
 import assert from "node:assert/strict";
 import { DiscordRenderer } from "../daemon/renderer.js";
@@ -71,7 +72,7 @@ test("sendIncrementalResponse prevents duplicate sends with lock", async () => {
   
   // Simulate text arriving while a send is in progress
   renderer.currentAssistantText = "First paragraph with enough text here.\n\nSecond paragraph with enough text.";
-  renderer.lastSentIndex = 0;
+  (renderer as any).lastSentIndex = 0;
   
   // First call should acquire lock and send
   const send1 = renderer.sendIncrementalResponse();
@@ -92,12 +93,12 @@ test("sendIncrementalResponse only sends unsent content", async () => {
   
   // First chunk
   renderer.currentAssistantText = "First paragraph with enough text here to meet minimum length requirements.\n\n";
-  renderer.lastSentIndex = 0;
+  (renderer as any).lastSentIndex = 0;
   await renderer.sendIncrementalResponse();
   
   const afterFirst = sentMessages.length;
   assert.ok(afterFirst > 0, "Should have sent first message");
-  assert.ok(renderer.lastSentIndex > 0, "lastSentIndex should advance");
+  assert.ok((renderer as any).lastSentIndex > 0, "lastSentIndex should advance");
   
   // Add second chunk
   renderer.currentAssistantText += "Second paragraph with more text here to meet requirements.\n\n";
@@ -118,17 +119,17 @@ test("renderQueued resets state for new request", async () => {
   
   // Simulate previous request state
   renderer.currentAssistantText = "old text";
-  renderer.lastSentIndex = 100;
+  (renderer as any).lastSentIndex = 100;
   renderer.sendingLock = true; // Simulate stuck lock
   
   // Start new request - don't use startTyping to avoid interval
   renderer.currentAssistantText = "";
-  renderer.lastSentIndex = 0;
+  (renderer as any).lastSentIndex = 0;
   renderer.sendingLock = false;
   
   // State should be reset
   assert.equal(renderer.currentAssistantText, "", "currentAssistantText should be reset");
-  assert.equal(renderer.lastSentIndex, 0, "lastSentIndex should be reset");
+  assert.equal((renderer as any).lastSentIndex, 0, "lastSentIndex should be reset");
   assert.equal(renderer.sendingLock, false, "sendingLock should be false");
 });
 
@@ -139,7 +140,7 @@ test("renderSuccess sends remaining unsent content", async () => {
   
   // Simulate partial send
   renderer.currentAssistantText = "Already sent portion. Remaining text here that needs to be sent.";
-  renderer.lastSentIndex = "Already sent portion. ".length;
+  (renderer as any).lastSentIndex = "Already sent portion. ".length;
   
   await renderer.renderSuccess();
   
@@ -147,7 +148,7 @@ test("renderSuccess sends remaining unsent content", async () => {
   assert.equal(sentMessages.length, 1, "Should send one message");
   assert.ok(sentMessages[0].content.includes("Remaining text here"), "Should send remaining text");
   assert.equal(renderer.currentAssistantText, "", "currentAssistantText should be cleared");
-  assert.equal(renderer.lastSentIndex, 0, "lastSentIndex should be reset");
+  assert.equal((renderer as any).lastSentIndex, 0, "lastSentIndex should be reset");
 });
 
 test("renderSuccess handles empty remaining content", async () => {
@@ -157,7 +158,7 @@ test("renderSuccess handles empty remaining content", async () => {
   
   // All content already sent
   renderer.currentAssistantText = "All content already sent.";
-  renderer.lastSentIndex = renderer.currentAssistantText.length;
+  (renderer as any).lastSentIndex = renderer.currentAssistantText.length;
   
   await renderer.renderSuccess();
   
@@ -189,7 +190,7 @@ test("handleSessionEvent triggers send on paragraph break", async () => {
   // Text with paragraph break and sufficient length
   const longText = "This is a long paragraph with enough text to meet the minimum length requirements for sending.\n\n";
   renderer.currentAssistantText = longText;
-  renderer.lastSentIndex = 0;
+  (renderer as any).lastSentIndex = 0;
   
   renderer.handleSessionEvent({
     type: "message_update",
@@ -212,7 +213,7 @@ test("sendingLock prevents concurrent execution", async () => {
   
   // Should return immediately without sending
   renderer.currentAssistantText = "Some text here that would normally be sent.\n\n";
-  renderer.lastSentIndex = 0;
+  (renderer as any).lastSentIndex = 0;
   
   await renderer.sendIncrementalResponse();
   

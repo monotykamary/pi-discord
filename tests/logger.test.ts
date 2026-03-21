@@ -9,7 +9,7 @@ test("logger ignores unserializable details instead of throwing", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-discord-logger-"));
   const logPath = path.join(tempDir, "daemon.log");
   const logger = new Logger(logPath);
-  const details = {};
+  const details: Record<string, unknown> = {};
   details.self = details;
 
   await assert.doesNotReject(logger.error("circular", details));

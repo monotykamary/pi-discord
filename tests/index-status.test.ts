@@ -5,30 +5,39 @@ import os from "node:os";
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import piDiscordExtension from "../index.js";
 import { ensureDir, pathExists } from "../lib/fs.js";
+import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+
+function createMockPi(messages: unknown[] = []): ExtensionAPI & { definition?: any; name?: string } {
+  return {
+    sendMessage(message: any) {
+      messages.push(message);
+    },
+    registerCommand(name: string, definition: any) {
+      (this as any).name = name;
+      (this as any).definition = definition;
+    },
+    on: () => undefined as any,
+    registerTool: () => undefined,
+    registerShortcut: () => undefined,
+    registerFlag: () => undefined,
+  } as unknown as ExtensionAPI & { definition?: any; name?: string };
+}
 
 test("/discord status does not create a config file when none exists", async () => {
   const tempHome = await mkdtemp(path.join(os.tmpdir(), "pi-discord-home-"));
   const originalHome = process.env.HOME;
   process.env.HOME = tempHome;
 
-  const messages = [];
-  const pi = {
-    sendMessage(message) {
-      messages.push(message);
-    },
-    registerCommand(name, definition) {
-      this.name = name;
-      this.definition = definition;
-    },
-  };
+  const messages: unknown[] = [];
+  const pi = createMockPi(messages);
 
   try {
     piDiscordExtension(pi);
-    await pi.definition.handler("status", { hasUI: false });
+    await pi.definition!.handler("status", { hasUI: false });
 
     const configPath = path.join(tempHome, ".pi", "agent", "pi-discord", "config.json");
     assert.equal(await pathExists(configPath), false);
-    assert.match(messages.at(-1).content, /Config errors: Missing `botToken`\.; Missing `applicationId`\./);
+    assert.match((messages.at(-1) as any).content, /Config errors: Missing `botToken`\.; Missing `applicationId`\./);
   } finally {
     process.env.HOME = originalHome;
   }
@@ -43,21 +52,15 @@ test("/discord open-config can open malformed JSON for repair", async () => {
   await ensureDir(path.dirname(configPath));
   await writeFile(configPath, '{\n  "botToken": "abc",\n', "utf8");
 
-  let editorText;
-  const pi = {
-    sendMessage() {},
-    registerCommand(name, definition) {
-      this.name = name;
-      this.definition = definition;
-    },
-  };
+  let editorText: string | undefined;
+  const pi = createMockPi();
 
   try {
     piDiscordExtension(pi);
-    await pi.definition.handler("open-config", {
+    await pi.definition!.handler("open-config", {
       hasUI: true,
       ui: {
-        editor: async (_title, text) => {
+        editor: async (_title: string, text: string) => {
           editorText = text;
           return null;
         },
@@ -75,24 +78,16 @@ test("/discord setup without UI does not create config as a side effect", async 
   const originalHome = process.env.HOME;
   process.env.HOME = tempHome;
 
-  const messages = [];
-  const pi = {
-    sendMessage(message) {
-      messages.push(message);
-    },
-    registerCommand(name, definition) {
-      this.name = name;
-      this.definition = definition;
-    },
-  };
+  const messages: unknown[] = [];
+  const pi = createMockPi(messages);
 
   try {
     piDiscordExtension(pi);
-    await pi.definition.handler("setup", { hasUI: false });
+    await pi.definition!.handler("setup", { hasUI: false });
 
     const configPath = path.join(tempHome, ".pi", "agent", "pi-discord", "config.json");
     assert.equal(await pathExists(configPath), false);
-    assert.match(messages.at(-1).content, /Interactive setup requires Pi UI/);
+    assert.match((messages.at(-1) as any).content, /Interactive setup requires Pi UI/);
   } finally {
     process.env.HOME = originalHome;
   }
@@ -107,22 +102,16 @@ test("/discord setup falls back to defaults when existing config JSON is malform
   await ensureDir(path.dirname(configPath));
   await writeFile(configPath, '{\n  "botToken": "abc",\n', "utf8");
 
-  const prompts = [];
-  const pi = {
-    sendMessage() {},
-    registerCommand(name, definition) {
-      this.name = name;
-      this.definition = definition;
-    },
-  };
+  const prompts: Array<{ label: string; value: string }> = [];
+  const pi = createMockPi();
 
   try {
     piDiscordExtension(pi);
-    await pi.definition.handler("setup", {
+    await pi.definition!.handler("setup", {
       hasUI: true,
       ui: {
-        input: async (label, value) => {
-          prompts.push({ label, value });
+        input: async (label: string, value?: string) => {
+          prompts.push({ label, value: value || "" });
           return null;
         },
       },
@@ -148,17 +137,11 @@ test("/discord setup full cancel does not overwrite malformed config", async () 
   await ensureDir(path.dirname(configPath));
   await writeFile(configPath, originalText, "utf8");
 
-  const pi = {
-    sendMessage() {},
-    registerCommand(name, definition) {
-      this.name = name;
-      this.definition = definition;
-    },
-  };
+  const pi = createMockPi();
 
   try {
     piDiscordExtension(pi);
-    await pi.definition.handler("setup", {
+    await pi.definition!.handler("setup", {
       hasUI: true,
       ui: {
         input: async () => null,
@@ -180,22 +163,14 @@ test("/discord status reports malformed config instead of crashing", async () =>
   await ensureDir(path.dirname(configPath));
   await writeFile(configPath, '{\n  "botToken": "abc",\n', "utf8");
 
-  const messages = [];
-  const pi = {
-    sendMessage(message) {
-      messages.push(message);
-    },
-    registerCommand(name, definition) {
-      this.name = name;
-      this.definition = definition;
-    },
-  };
+  const messages: unknown[] = [];
+  const pi = createMockPi(messages);
 
   try {
     piDiscordExtension(pi);
-    await pi.definition.handler("status", { hasUI: false });
+    await pi.definition!.handler("status", { hasUI: false });
 
-    assert.match(messages.at(-1).content, /Config read error:/);
+    assert.match((messages.at(-1) as any).content, /Config read error:/);
   } finally {
     process.env.HOME = originalHome;
   }
@@ -210,23 +185,15 @@ test("/discord start reports malformed config instead of crashing", async () => 
   await ensureDir(path.dirname(configPath));
   await writeFile(configPath, '{\n  "botToken": "abc",\n', "utf8");
 
-  const messages = [];
-  const pi = {
-    sendMessage(message) {
-      messages.push(message);
-    },
-    registerCommand(name, definition) {
-      this.name = name;
-      this.definition = definition;
-    },
-  };
+  const messages: unknown[] = [];
+  const pi = createMockPi(messages);
 
   try {
     piDiscordExtension(pi);
-    await pi.definition.handler("start", { hasUI: false });
+    await pi.definition!.handler("start", { hasUI: false });
 
-    assert.match(messages.at(-1).content, /Could not read .*config\.json:/);
-    assert.match(messages.at(-1).content, /Run \/discord open-config to repair it\./);
+    assert.match((messages.at(-1) as any).content, /Could not read .*config\.json:/);
+    assert.match((messages.at(-1) as any).content, /Run \/discord open-config to repair it\./);
   } finally {
     process.env.HOME = originalHome;
   }
@@ -240,20 +207,12 @@ test("/discord setup reports unreadable config paths instead of silently falling
   const configPath = path.join(tempHome, ".pi", "agent", "pi-discord", "config.json");
   await ensureDir(configPath);
 
-  const messages = [];
-  const pi = {
-    sendMessage(message) {
-      messages.push(message);
-    },
-    registerCommand(name, definition) {
-      this.name = name;
-      this.definition = definition;
-    },
-  };
+  const messages: unknown[] = [];
+  const pi = createMockPi(messages);
 
   try {
     piDiscordExtension(pi);
-    await pi.definition.handler("setup", {
+    await pi.definition!.handler("setup", {
       hasUI: true,
       ui: {
         input: async () => {
@@ -262,7 +221,7 @@ test("/discord setup reports unreadable config paths instead of silently falling
       },
     });
 
-    assert.match(messages.at(-1).content, /Could not read .*config\.json:/);
+    assert.match((messages.at(-1) as any).content, /Could not read .*config\.json:/);
   } finally {
     process.env.HOME = originalHome;
   }
@@ -276,20 +235,12 @@ test("/discord open-config reports unreadable config paths instead of crashing",
   const configPath = path.join(tempHome, ".pi", "agent", "pi-discord", "config.json");
   await ensureDir(configPath);
 
-  const messages = [];
-  const pi = {
-    sendMessage(message) {
-      messages.push(message);
-    },
-    registerCommand(name, definition) {
-      this.name = name;
-      this.definition = definition;
-    },
-  };
+  const messages: unknown[] = [];
+  const pi = createMockPi(messages);
 
   try {
     piDiscordExtension(pi);
-    await pi.definition.handler("open-config", {
+    await pi.definition!.handler("open-config", {
       hasUI: true,
       ui: {
         editor: async () => {
@@ -298,7 +249,7 @@ test("/discord open-config reports unreadable config paths instead of crashing",
       },
     });
 
-    assert.match(messages.at(-1).content, /Could not read .*config\.json:/);
+    assert.match((messages.at(-1) as any).content, /Could not read .*config\.json:/);
   } finally {
     process.env.HOME = originalHome;
   }

@@ -4,6 +4,7 @@ import path from "node:path";
 import os from "node:os";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { buildInjectedContext } from "../daemon/prompt-shaper.js";
+import type { JournalStore } from "../daemon/journal.js";
 
 test("injected context excludes the active inbound source to avoid duplicating the current request", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-discord-context-"));
@@ -15,10 +16,10 @@ test("injected context excludes the active inbound source to avoid duplicating t
     { kind: "inbound", sourceId: "m2", authorName: "bob", text: "current request should not be duplicated" },
   ];
   const journal = {
-    recent(limit, predicate) {
+    recent(limit: number, predicate: (entry: any) => boolean) {
       return journalEntries.filter(predicate).slice(-limit);
     },
-  };
+  } as unknown as JournalStore;
 
   const injected = await buildInjectedContext({
     memoryPath,

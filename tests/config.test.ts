@@ -66,7 +66,7 @@ test("normalizeConfig keeps only valid route override fields", () => {
 
 test("normalizeConfig handles null input and trims config strings", () => {
   const paths = getPaths({ agentDir: "/tmp/agent", workspaceDir: "/tmp/agent/pi-discord" });
-  const emptyConfig = normalizeConfig(paths, null);
+  const emptyConfig = normalizeConfig(paths, null as any);
   assert.equal(emptyConfig.commandName, "pi");
 
   const config = normalizeConfig(paths, {
@@ -108,7 +108,7 @@ test("saveConfig persists normalized config", async () => {
     dmAllowlistUserIds: [" dm1 "],
     commandName: " pi ",
     routeOverrides: { routeA: { executionRoot: " /tmp/project ", mode: "shared" } },
-  });
+  } as any);
 
   const config = await loadConfig(paths);
   assert.equal(config.botToken, "token");

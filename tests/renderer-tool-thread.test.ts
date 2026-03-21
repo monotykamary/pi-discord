@@ -1,3 +1,4 @@
+// @ts-nocheck
 import test from "node:test";
 import assert from "node:assert/strict";
 import { DiscordRenderer } from "../daemon/renderer.js";
@@ -283,7 +284,7 @@ test("sendIncrementalResponse does not fragment short greetings", async () => {
   
   // Short greeting with period
   renderer.currentAssistantText = "Hi! How can I help?";
-  renderer.lastSentIndex = 0;
+  (renderer as any).lastSentIndex = 0;
   
   await renderer.sendIncrementalResponse();
   
@@ -298,7 +299,7 @@ test("sendIncrementalResponse sends longer content with periods", async () => {
   
   // Longer content with period after 50+ chars
   renderer.currentAssistantText = "This is a longer response that has enough characters before the period. Here is more.";
-  renderer.lastSentIndex = 0;
+  (renderer as any).lastSentIndex = 0;
   
   await renderer.sendIncrementalResponse();
   
@@ -317,7 +318,7 @@ test("renderQueued resets all tool state", async () => {
   
   // Reset
   renderer.currentAssistantText = "";
-  renderer.lastSentIndex = 0;
+  (renderer as any).lastSentIndex = 0;
   renderer.lastSentContent = undefined;
   renderer.creatingPlaceholder = false;
   renderer.pendingTools = 0;

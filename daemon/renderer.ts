@@ -68,10 +68,10 @@ export class DiscordRenderer {
   currentAssistantText: string;
   private typingInterval: NodeJS.Timeout | undefined;
   lastMessageId: string | undefined;
-  private lastSentIndex: number;
-  private sendingLock: boolean;
-  private creatingPlaceholder: boolean;
-  private lastSentContent: string | undefined;
+  lastSentIndex: number; // public for testing
+  sendingLock: boolean; // public for testing
+  creatingPlaceholder: boolean; // public for testing
+  lastSentContent: string | undefined; // public for testing
   pendingTools: number;
   toolIndicatorMessageId: string | undefined;
   creatingIndicator: boolean;
