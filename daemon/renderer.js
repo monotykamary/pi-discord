@@ -216,8 +216,14 @@ export class DiscordRenderer {
   }
 
   async postToolDetail(content) {
+    // If no message exists yet (tool fired before any text output), 
+    // we can't create a thread. Silently skip in this case.
+    if (!this.lastMessageId) {
+      return;
+    }
+    
     // Create thread off last message if not exists
-    if (!this.manifest.detailsThreadId && this.lastMessageId && this.enableDetailsThreads) {
+    if (!this.manifest.detailsThreadId && this.enableDetailsThreads) {
       try {
         const channel = await this.getTargetChannel();
         if ("messages" in channel) {
@@ -235,11 +241,15 @@ export class DiscordRenderer {
         // Thread creation failed, continue without it
       }
     }
+    
     // Post to thread or silently skip if no thread
-    const payload = { content: content.slice(0, DISCORD_MESSAGE_LIMIT), allowedMentions: { parse: [] } };
     const thread = await this.ensureDetailsThread();
     if (thread && "send" in thread) {
       try {
+        const payload = { 
+          content: content.slice(0, DISCORD_MESSAGE_LIMIT), 
+          allowedMentions: { parse: [] } 
+        };
         await thread.send(payload);
       } catch {
         // Ignore thread send errors
