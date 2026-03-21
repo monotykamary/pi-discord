@@ -412,16 +412,37 @@ export class DiscordRenderer {
     // Send any remaining unsent text
     const remaining = this.currentAssistantText.slice(this.lastSentIndex).trim();
     if (remaining) {
-      try {
-        const channel = await this.getTargetChannel();
-        await channel.send({ content: remaining.slice(0, DISCORD_MESSAGE_LIMIT), allowedMentions: { parse: [] } });
-      } catch {
-        // Ignore send errors
+      // Check if we already sent this exact content
+      const normalizedLast = this.lastSentContent?.trim();
+      const normalizedCurrent = remaining.trim();
+      if (normalizedLast !== normalizedCurrent) {
+        try {
+          const channel = await this.getTargetChannel();
+          const message = await channel.send({ content: remaining.slice(0, DISCORD_MESSAGE_LIMIT), allowedMentions: { parse: [] } });
+          this.lastSentContent = normalizedCurrent;
+          this.lastMessageId = message.id;
+          await this.logger.info("success-remaining-sent", { 
+            routeKey: this.manifest.routeKey,
+            messageId: message.id,
+            content: normalizedCurrent.slice(0, 50)
+          });
+        } catch (err) {
+          await this.logger.warn("success-remaining-failed", { 
+            routeKey: this.manifest.routeKey,
+            error: String(err) 
+          });
+        }
+      } else {
+        await this.logger.info("success-duplicate-prevented", { 
+          routeKey: this.manifest.routeKey,
+          content: normalizedCurrent.slice(0, 50)
+        });
       }
     }
     // Reset for next request
     this.currentAssistantText = "";
     this.lastSentIndex = 0;
+    this.lastSentContent = undefined;
   }
 
   async renderCancelled(reason = "Stopped.") {
