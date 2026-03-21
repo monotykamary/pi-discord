@@ -228,6 +228,8 @@ export class DiscordRenderer {
   }
 
   startTyping() {
+    // Clear any existing interval first to prevent duplicates
+    this.stopTyping();
     // Send initial typing indicator
     this.sendTyping();
     // Keep sending every 8 seconds while processing (Discord typing expires after ~10s)
