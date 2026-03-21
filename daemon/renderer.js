@@ -32,10 +32,8 @@ export class DiscordRenderer {
     this.manifest = options.manifest;
     this.logger = options.logger;
     this.persistManifest = options.persistManifest;
-    this.flushMs = options.flushMs;
     this.enableDetailsThreads = options.enableDetailsThreads;
     this.currentAssistantText = "";
-    this.flushTimer = undefined;
     this.typingInterval = undefined;
   }
 
@@ -56,95 +54,22 @@ export class DiscordRenderer {
     return channel;
   }
 
-  createStopRow() {
-    return [
-      new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-          .setCustomId(`pi-discord:stop:${this.manifest.routeKey}`)
-          .setLabel("Stop")
-          .setStyle(ButtonStyle.Danger),
-      ),
-    ];
-  }
-
-  async ensurePrimaryMessage(fallbackText = "Working...") {
-    const channel = await this.getTargetChannel();
-    if (this.manifest.primaryMessageId && "messages" in channel) {
-      try {
-        const existing = await channel.messages.fetch(this.manifest.primaryMessageId);
-        return existing;
-      } catch {
-        this.manifest.primaryMessageId = undefined;
-      }
-    }
-
-    const message = await channel.send({
-      content: fallbackText,
-      allowedMentions: { parse: [] },
-    });
-    this.manifest.primaryMessageId = message.id;
-    await this.persistManifest();
-    return message;
-  }
-
-  async updatePrimary(content) {
-    const message = await this.ensurePrimaryMessage(content);
-    const chunks = splitDiscordText(content);
-    const primaryContent = chunks.length > 1
-      ? `${chunks[0]}\n\n[Output truncated while streaming. Full response will be posted when the run finishes.]`
-      : chunks[0];
-
-    await message.edit({
-      content: primaryContent,
-      allowedMentions: { parse: [] },
-    });
-    await this.persistManifest();
-
-    if (chunks.length > 1) {
-      const channel = await this.getTargetChannel();
-      for (const chunk of chunks.slice(1)) {
-        await channel.send({ content: chunk, allowedMentions: { parse: [] } });
-      }
-    }
-  }
-
-  schedulePrimaryFlush() {
-    if (this.flushTimer) return;
-    this.flushTimer = setTimeout(() => {
-      this.flushTimer = undefined;
-      this.runInBackground("primary-update-failed", async () => {
-        await this.updatePrimary("*Thinking...*");
-      });
-    }, this.flushMs);
-  }
-
   async ensureDetailsThread() {
-    if (!this.enableDetailsThreads) return undefined;
-    if (!this.manifest.detailsThreadId || !this.manifest.primaryMessageId) {
-      const primary = await this.ensurePrimaryMessage();
-      if (typeof primary.startThread !== "function") return undefined;
+    // Details thread requires a primary message - returns undefined if not set
+    if (!this.enableDetailsThreads || !this.manifest.primaryMessageId) {
+      return undefined;
+    }
+    if (this.manifest.detailsThreadId) {
       try {
-        const thread = await primary.startThread({
-          name: `pi details ${new Date().toISOString().slice(11, 19)}`,
-          autoArchiveDuration: 60,
-        });
-        this.manifest.detailsThreadId = thread.id;
+        const channel = await this.client.channels.fetch(this.manifest.detailsThreadId);
+        return channel && "send" in channel ? channel : undefined;
+      } catch {
+        this.manifest.detailsThreadId = undefined;
         await this.persistManifest();
-        return thread;
-      } catch (error) {
-        await this.logger.warn("details-thread-create-failed", { routeKey: this.manifest.routeKey, error: String(error) });
         return undefined;
       }
     }
-
-    try {
-      const channel = await this.client.channels.fetch(this.manifest.detailsThreadId);
-      return channel && "send" in channel ? channel : undefined;
-    } catch {
-      this.manifest.detailsThreadId = undefined;
-      await this.persistManifest();
-      return undefined;
-    }
+    return undefined;
   }
 
   async clearDetailsThread(reason, error) {
@@ -201,38 +126,25 @@ export class DiscordRenderer {
   }
 
   handleSessionEvent(event) {
+    // Accumulate response text for final message
     if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
       this.currentAssistantText += event.assistantMessageEvent.delta;
-      this.schedulePrimaryFlush();
     }
-    if (event.type === "tool_execution_start") {
-      this.runInBackground("tool-detail-post-failed", async () => {
-        await this.postDetail(`Tool started: ${event.toolName}`);
-      });
-    }
-    if (event.type === "tool_execution_end") {
-      this.runInBackground("tool-detail-post-failed", async () => {
-        await this.postDetail(`Tool finished: ${event.toolName}${event.isError ? " (error)" : ""}`);
-      });
-    }
+    // Tool events are logged to journal only, not posted to Discord
+    // for clean conversation flow
   }
 
   async renderQueued(item) {
-    await this.updatePrimary("*Thinking...*");
     this.startTyping();
   }
 
   async renderRunning(item) {
-    await this.updatePrimary("*Thinking...*");
     this.startTyping();
   }
 
   startTyping() {
-    // Clear any existing interval first to prevent duplicates
     this.stopTyping();
-    // Send initial typing indicator
     this.sendTyping();
-    // Keep sending every 8 seconds while processing (Discord typing expires after ~10s)
     this.typingInterval = setInterval(() => {
       this.sendTyping();
     }, 8000);
@@ -245,7 +157,7 @@ export class DiscordRenderer {
         await channel.sendTyping();
       }
     } catch {
-      // Ignore typing errors - not critical
+      // Ignore typing errors
     }
   }
 
@@ -257,29 +169,27 @@ export class DiscordRenderer {
   }
 
   async renderSuccess() {
-    if (this.flushTimer) {
-      clearTimeout(this.flushTimer);
-      this.flushTimer = undefined;
-    }
     this.stopTyping();
-    await this.updatePrimary(this.currentAssistantText || "Done.");
+    const channel = await this.getTargetChannel();
+    const chunks = splitDiscordText(this.currentAssistantText || "Done.");
+    const message = await channel.send({ content: chunks[0], allowedMentions: { parse: [] } });
+    this.manifest.primaryMessageId = message.id;
+    await this.persistManifest();
+    // Send remaining chunks if any
+    for (const chunk of chunks.slice(1)) {
+      await channel.send({ content: chunk, allowedMentions: { parse: [] } });
+    }
   }
 
   async renderCancelled(reason = "Stopped.") {
-    if (this.flushTimer) {
-      clearTimeout(this.flushTimer);
-      this.flushTimer = undefined;
-    }
     this.stopTyping();
-    await this.updatePrimary(`*${reason}*`);
+    const channel = await this.getTargetChannel();
+    await channel.send({ content: `*${reason}*`, allowedMentions: { parse: [] } });
   }
 
   async renderFailure(error) {
-    if (this.flushTimer) {
-      clearTimeout(this.flushTimer);
-      this.flushTimer = undefined;
-    }
     this.stopTyping();
-    await this.updatePrimary(`**Error:** ${String(error).slice(0, 1800)}`);
+    const channel = await this.getTargetChannel();
+    await channel.send({ content: `**Error:** ${String(error).slice(0, 1800)}`, allowedMentions: { parse: [] } });
   }
 }
