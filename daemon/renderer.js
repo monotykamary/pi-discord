@@ -35,7 +35,8 @@ export class DiscordRenderer {
     this.enableDetailsThreads = options.enableDetailsThreads;
     this.currentAssistantText = "";
     this.typingInterval = undefined;
-    this.lastMessageId = undefined; // Track last message for thread creation
+    this.lastMessageId = undefined;
+    this.lastSentIndex = 0; // Track how much was already sent to prevent duplicates
   }
 
   runInBackground(label, task) {
@@ -146,37 +147,37 @@ export class DiscordRenderer {
   }
 
   async sendIncrementalResponse() {
-    const text = this.currentAssistantText.trim();
-    if (!text || text.length < 20) return; // Need substantial text
+    const fullText = this.currentAssistantText;
+    const unsentText = fullText.slice(this.lastSentIndex).trimStart();
     
-    // Only send on paragraph breaks (double newline) or clear sentence endings
-    // Don't send if we might be in a code block or mid-line
-    const hasParagraphBreak = text.includes('\n\n');
-    const endsWithSentence = /[.!?]\s*$/.test(text);
-    const inCodeBlock = (text.match(/```/g) || []).length % 2 === 1;
+    if (!unsentText || unsentText.length < 20) return;
+    
+    // Only send on paragraph breaks or clear sentence endings
+    const hasParagraphBreak = unsentText.includes('\n\n');
+    const endsWithSentence = /[.!?]\s*$/.test(unsentText);
+    const inCodeBlock = (fullText.match(/```/g) || []).length % 2 === 1;
     
     if (!hasParagraphBreak && !endsWithSentence) return;
-    if (inCodeBlock) return; // Don't break code blocks
+    if (inCodeBlock) return;
     
-    // Find the last good break point
-    let sendUpTo = text.length;
+    // Find break point in unsent portion only
+    let sendLength = unsentText.length;
     if (hasParagraphBreak) {
-      sendUpTo = text.lastIndexOf('\n\n') + 2;
+      const breakIndex = unsentText.indexOf('\n\n');
+      if (breakIndex > 0) sendLength = breakIndex + 2;
     } else if (endsWithSentence) {
-      // Find last sentence end
-      const match = text.match(/.*[.!?]\s*/s);
-      if (match) sendUpTo = match[0].length;
+      const matches = unsentText.match(/.*[.!?]\s*/s);
+      if (matches) sendLength = matches[0].length;
     }
     
-    const toSend = text.slice(0, sendUpTo).trim();
+    const toSend = unsentText.slice(0, sendLength).trim();
     if (!toSend || toSend.length < 10) return;
     
     try {
       const channel = await this.getTargetChannel();
       const message = await channel.send({ content: toSend.slice(0, DISCORD_MESSAGE_LIMIT), allowedMentions: { parse: [] } });
       this.lastMessageId = message.id;
-      // Keep remaining text for next send
-      this.currentAssistantText = text.slice(sendUpTo).trimStart();
+      this.lastSentIndex += sendLength;
     } catch {
       // Ignore send errors
     }
@@ -215,6 +216,8 @@ export class DiscordRenderer {
   }
 
   async renderQueued(item) {
+    this.currentAssistantText = "";
+    this.lastSentIndex = 0;
     this.startTyping();
   }
 
@@ -250,19 +253,19 @@ export class DiscordRenderer {
 
   async renderSuccess() {
     this.stopTyping();
-    // Send any remaining text that wasn't sent incrementally
-    const remaining = this.currentAssistantText.trim();
+    // Send any remaining unsent text
+    const remaining = this.currentAssistantText.slice(this.lastSentIndex).trim();
     if (remaining) {
       try {
         const channel = await this.getTargetChannel();
-        const message = await channel.send({ content: remaining.slice(0, DISCORD_MESSAGE_LIMIT), allowedMentions: { parse: [] } });
-        this.manifest.primaryMessageId = message.id;
-        await this.persistManifest();
+        await channel.send({ content: remaining.slice(0, DISCORD_MESSAGE_LIMIT), allowedMentions: { parse: [] } });
       } catch {
         // Ignore send errors
       }
     }
+    // Reset for next request
     this.currentAssistantText = "";
+    this.lastSentIndex = 0;
   }
 
   async renderCancelled(reason = "Stopped.") {
