@@ -35,7 +35,7 @@ export class RouteSessionHost {
   private journal: JournalStore;
   private logger: Logger;
   private uploadFile: (filePath: string, options?: { title?: string }) => Promise<{ messageId: string; url?: string }>;
-  private currentSourceId: string | undefined;
+  currentSourceId: string | undefined;
   private session: AgentSession | undefined;
   private sessionPromise: Promise<AgentSession> | undefined;
 

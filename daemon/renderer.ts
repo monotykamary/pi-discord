@@ -1,10 +1,13 @@
 import { basename } from "node:path";
-import { AttachmentBuilder, ChannelType } from "discord.js";
+import { AttachmentBuilder, ChannelType, type Client, type TextChannel, type ThreadChannel, type Message, type DMChannel } from "discord.js";
 import { DISCORD_MESSAGE_LIMIT } from "../lib/constants.js";
+import type { RouteManifest } from "./registry.js";
+import type { Logger } from "./logger.js";
+import type { QueueItem } from "./queue-store.js";
 
-export function splitDiscordText(text) {
+export function splitDiscordText(text: string): string[] {
   if (!text) return ["(no assistant output)"];
-  const chunks = [];
+  const chunks: string[] = [];
   let remaining = text;
   while (remaining.length > DISCORD_MESSAGE_LIMIT) {
     let index = remaining.lastIndexOf("\n", DISCORD_MESSAGE_LIMIT);
@@ -16,18 +19,71 @@ export function splitDiscordText(text) {
   return chunks;
 }
 
+export interface ToolParams {
+  name: string;
+  params: Record<string, unknown>;
+}
+
+export interface ExtractedContent {
+  content: string | null;
+  filename: string | null;
+  isDiff: boolean;
+}
+
+export interface SessionEvent {
+  type: string;
+  toolName?: string;
+  result?: {
+    content?: unknown;
+    filePath?: string;
+    path?: string;
+    details?: { diff?: string };
+    message?: string;
+    [key: string]: unknown;
+  };
+  args?: Record<string, unknown>;
+  assistantMessageEvent?: {
+    type: string;
+    delta?: string;
+  };
+}
+
+export interface DiscordRendererOptions {
+  client: Client;
+  manifest: RouteManifest;
+  logger: Logger;
+  persistManifest: () => Promise<void>;
+  flushMs: number;
+  enableDetailsThreads: boolean;
+}
+
+export type WritableChannel = TextChannel | ThreadChannel | DMChannel;
+
 export class DiscordRenderer {
-  /**
-   * @param {{
-   *   client: import('discord.js').Client,
-   *   manifest: import('./registry.js').RouteManifest,
-   *   logger: import('./logger.js').Logger,
-   *   persistManifest: () => Promise<void>,
-   *   flushMs: number,
-   *   enableDetailsThreads: boolean,
-   * }} options
-   */
-  constructor(options) {
+  client: Client;
+  manifest: RouteManifest;
+  logger: Logger;
+  persistManifest: () => Promise<void>;
+  enableDetailsThreads: boolean;
+  currentAssistantText: string;
+  private typingInterval: NodeJS.Timeout | undefined;
+  lastMessageId: string | undefined;
+  private lastSentIndex: number;
+  private sendingLock: boolean;
+  private creatingPlaceholder: boolean;
+  private lastSentContent: string | undefined;
+  pendingTools: number;
+  toolIndicatorMessageId: string | undefined;
+  creatingIndicator: boolean;
+  private toolQueue: Array<() => Promise<void>>;
+  private processingToolQueue: boolean;
+  private toolParams: Map<string, ToolParams>;
+  private currentToolKey: string | null;
+  private textQueue: string[];
+  private processingTextQueue: boolean;
+  private lastQueuedText: string;
+
+  constructor(options: DiscordRendererOptions) {
     this.client = options.client;
     this.manifest = options.manifest;
     this.logger = options.logger;
@@ -43,20 +99,16 @@ export class DiscordRenderer {
     this.pendingTools = 0;
     this.toolIndicatorMessageId = undefined;
     this.creatingIndicator = false;
-    // Tool operation queue to prevent races
     this.toolQueue = [];
     this.processingToolQueue = false;
-    // Store tool parameters for diff generation
     this.toolParams = new Map();
     this.currentToolKey = null;
-    // Text sending queue to prevent duplicate/race issues
     this.textQueue = [];
     this.processingTextQueue = false;
-    this.lastQueuedText = '';
+    this.lastQueuedText = "";
   }
 
-  enqueueTextSend(text) {
-    // Only queue if this is new text (not duplicate of last queued)
+  enqueueTextSend(text: string): void {
     if (text !== this.lastQueuedText) {
       this.textQueue.push(text);
       this.lastQueuedText = text;
@@ -64,50 +116,52 @@ export class DiscordRenderer {
     }
   }
 
-  async processTextQueue() {
+  private async processTextQueue(): Promise<void> {
     if (this.processingTextQueue) return;
     this.processingTextQueue = true;
-    
+
     while (this.textQueue.length > 0) {
       const text = this.textQueue.shift();
+      if (!text) continue;
       try {
         await this.sendTextChunk(text);
       } catch (error) {
-        await this.logger.warn("text-send-failed", { 
-          routeKey: this.manifest.routeKey, 
-          error: String(error) 
+        await this.logger.warn("text-send-failed", {
+          routeKey: this.manifest.routeKey,
+          error: String(error),
         });
       }
     }
-    
+
     this.processingTextQueue = false;
   }
 
-  enqueueToolOperation(operation) {
+  enqueueToolOperation(operation: () => Promise<void>): void {
     this.toolQueue.push(operation);
     void this.processToolQueue();
   }
 
-  async processToolQueue() {
+  private async processToolQueue(): Promise<void> {
     if (this.processingToolQueue) return;
     this.processingToolQueue = true;
-    
+
     while (this.toolQueue.length > 0) {
       const operation = this.toolQueue.shift();
+      if (!operation) continue;
       try {
         await operation();
       } catch (error) {
-        await this.logger.warn("tool-queue-operation-failed", { 
-          routeKey: this.manifest.routeKey, 
-          error: String(error) 
+        await this.logger.warn("tool-queue-operation-failed", {
+          routeKey: this.manifest.routeKey,
+          error: String(error),
         });
       }
     }
-    
+
     this.processingToolQueue = false;
   }
 
-  runInBackground(label, task) {
+  runInBackground(label: string, task: () => Promise<void>): void {
     void Promise.resolve()
       .then(task)
       .catch(async (error) => {
@@ -115,58 +169,57 @@ export class DiscordRenderer {
       });
   }
 
-  async getTargetChannel() {
+  async getTargetChannel(): Promise<WritableChannel> {
     const targetId = this.manifest.scope.threadId ?? this.manifest.scope.channelId;
     const channel = await this.client.channels.fetch(targetId);
     if (!channel || !("send" in channel)) {
       throw new Error(`Discord channel ${targetId} is not writable.`);
     }
-    return channel;
+    return channel as WritableChannel;
   }
 
-  async ensureDetailsThread() {
-    // Details thread requires a message to thread from - use lastMessageId for incremental mode
+  async ensureDetailsThread(): Promise<WritableChannel | undefined> {
     if (!this.enableDetailsThreads) {
       return undefined;
     }
-    // Prefer detailsThreadId if already cached
     if (this.manifest.detailsThreadId) {
       try {
         const channel = await this.client.channels.fetch(this.manifest.detailsThreadId);
         if (channel && "send" in channel) {
-          await this.logger.info("details-thread-reused", { 
+          await this.logger.info("details-thread-reused", {
             routeKey: this.manifest.routeKey,
-            threadId: this.manifest.detailsThreadId 
+            threadId: this.manifest.detailsThreadId,
           });
-          return channel;
+          return channel as WritableChannel;
         }
-        await this.logger.warn("details-thread-not-writable", { 
-          routeKey: this.manifest.routeKey,
-          threadId: this.manifest.detailsThreadId 
-        });
-      } catch (err) {
-        await this.logger.warn("details-thread-fetch-failed", { 
+        await this.logger.warn("details-thread-not-writable", {
           routeKey: this.manifest.routeKey,
           threadId: this.manifest.detailsThreadId,
-          error: String(err) 
+        });
+      } catch (err) {
+        await this.logger.warn("details-thread-fetch-failed", {
+          routeKey: this.manifest.routeKey,
+          threadId: this.manifest.detailsThreadId,
+          error: String(err),
         });
       }
-      // Clear stale thread ID - don't persist, it's ephemeral
       this.manifest.detailsThreadId = undefined;
     }
     return undefined;
   }
 
-  async clearDetailsThread(reason, error) {
+  async clearDetailsThread(reason: string, error: unknown): Promise<void> {
     this.manifest.detailsThreadId = undefined;
     await this.logger.warn(reason, { routeKey: this.manifest.routeKey, error: String(error) });
   }
 
-  async uploadJsonToThread(filename, jsonContent, options = {}) {
-    // Ensure thread exists first (create if needed)
+  async uploadJsonToThread(
+    filename: string,
+    jsonContent: string,
+    options: { title?: string } = {},
+  ): Promise<{ messageId: string; url?: string }> {
     let thread = await this.ensureDetailsThread();
     if (!thread && this.enableDetailsThreads) {
-      // Need to create thread - MUST use indicator as anchor, never text messages
       if (!this.toolIndicatorMessageId) {
         await this.showToolIndicator();
       }
@@ -176,15 +229,15 @@ export class DiscordRenderer {
           const channel = await this.getTargetChannel();
           if ("messages" in channel) {
             const message = await channel.messages.fetch(threadAnchorId);
-            if (typeof message.startThread === "function") {
-              thread = await message.startThread({
+            if (typeof (message as any).startThread === "function") {
+              thread = await (message as any).startThread({
                 name: "Tool calls",
                 autoArchiveDuration: 60,
               });
               this.manifest.detailsThreadId = thread.id;
-              await this.logger.info("tool-thread-created-for-upload", { 
-                routeKey: this.manifest.routeKey, 
-                threadId: thread.id 
+              await this.logger.info("tool-thread-created-for-upload", {
+                routeKey: this.manifest.routeKey,
+                threadId: thread.id,
               });
             }
           }
@@ -193,13 +246,13 @@ export class DiscordRenderer {
         }
       }
     }
-    
+
     const payload = {
       content: options.title ?? `\`\`\`json\n${filename}\n\`\`\``, 
       files: [new AttachmentBuilder(Buffer.from(jsonContent), { name: filename })],
-      allowedMentions: { parse: [] },
+      allowedMentions: { parse: [] as never[] },
     };
-    
+
     if (thread && "send" in thread) {
       try {
         const message = await thread.send(payload);
@@ -208,72 +261,74 @@ export class DiscordRenderer {
         await this.clearDetailsThread("details-thread-json-upload-failed", error);
       }
     }
-    
-    // Fallback to channel
+
     const channel = await this.getTargetChannel();
     const message = await channel.send(payload);
     return { messageId: message.id, url: message.attachments.first()?.url };
   }
 
-  getLanguageFromExtension(ext) {
-    const extMap = {
-      'js': 'javascript',
-      'ts': 'typescript',
-      'jsx': 'jsx',
-      'tsx': 'tsx',
-      'py': 'python',
-      'rb': 'ruby',
-      'go': 'go',
-      'rs': 'rust',
-      'java': 'java',
-      'c': 'c',
-      'cpp': 'cpp',
-      'h': 'c',
-      'hpp': 'cpp',
-      'cs': 'csharp',
-      'php': 'php',
-      'swift': 'swift',
-      'kt': 'kotlin',
-      'scala': 'scala',
-      'r': 'r',
-      'm': 'objectivec',
-      'sh': 'bash',
-      'bash': 'bash',
-      'zsh': 'bash',
-      'fish': 'fish',
-      'ps1': 'powershell',
-      'sql': 'sql',
-      'yaml': 'yaml',
-      'yml': 'yaml',
-      'json': 'json',
-      'xml': 'xml',
-      'html': 'html',
-      'htm': 'html',
-      'css': 'css',
-      'scss': 'scss',
-      'sass': 'sass',
-      'less': 'less',
-      'md': 'markdown',
-      'markdown': 'markdown',
-      'dockerfile': 'dockerfile',
-      'tf': 'terraform',
-      'hcl': 'hcl',
-      'vue': 'vue',
-      'svelte': 'svelte',
-      'astro': 'astro',
-      'diff': 'diff',
-      'patch': 'diff',
-      'txt': 'text',
-      'log': 'text',
+  getLanguageFromExtension(ext: string | undefined): string {
+    const extMap: Record<string, string> = {
+      js: "javascript",
+      ts: "typescript",
+      jsx: "jsx",
+      tsx: "tsx",
+      py: "python",
+      rb: "ruby",
+      go: "go",
+      rs: "rust",
+      java: "java",
+      c: "c",
+      cpp: "cpp",
+      h: "c",
+      hpp: "cpp",
+      cs: "csharp",
+      php: "php",
+      swift: "swift",
+      kt: "kotlin",
+      scala: "scala",
+      r: "r",
+      m: "objectivec",
+      sh: "bash",
+      bash: "bash",
+      zsh: "bash",
+      fish: "fish",
+      ps1: "powershell",
+      sql: "sql",
+      yaml: "yaml",
+      yml: "yaml",
+      json: "json",
+      xml: "xml",
+      html: "html",
+      htm: "html",
+      css: "css",
+      scss: "scss",
+      sass: "sass",
+      less: "less",
+      md: "markdown",
+      markdown: "markdown",
+      dockerfile: "dockerfile",
+      tf: "terraform",
+      hcl: "hcl",
+      vue: "vue",
+      svelte: "svelte",
+      astro: "astro",
+      diff: "diff",
+      patch: "diff",
+      txt: "text",
+      log: "text",
     };
-    return extMap[ext?.toLowerCase()] || ext || 'text';
+    return extMap[ext?.toLowerCase()] || ext || "text";
   }
 
-  async uploadContentToThread(filename, content, lang, options = {}) {
-    // Ensure thread exists first (create if needed)
+  async uploadContentToThread(
+    filename: string,
+    content: string,
+    lang: string,
+    options: { title?: string } = {},
+  ): Promise<{ messageId: string; url?: string }> {
     let thread = await this.ensureDetailsThread();
     if (!thread && this.enableDetailsThreads) {
-      // Need to create thread - MUST use indicator as anchor, never text messages
       if (!this.toolIndicatorMessageId) {
         await this.showToolIndicator();
       }
@@ -283,15 +338,15 @@ export class DiscordRenderer {
           const channel = await this.getTargetChannel();
           if ("messages" in channel) {
             const message = await channel.messages.fetch(threadAnchorId);
-            if (typeof message.startThread === "function") {
-              thread = await message.startThread({
+            if (typeof (message as any).startThread === "function") {
+              thread = await (message as any).startThread({
                 name: "Tool calls",
                 autoArchiveDuration: 60,
               });
               this.manifest.detailsThreadId = thread.id;
-              await this.logger.info("tool-thread-created-for-content", { 
-                routeKey: this.manifest.routeKey, 
-                threadId: thread.id 
+              await this.logger.info("tool-thread-created-for-content", {
+                routeKey: this.manifest.routeKey,
+                threadId: thread.id,
               });
             }
           }
@@ -300,13 +355,13 @@ export class DiscordRenderer {
         }
       }
     }
-    
+
     const payload = {
       content: options.title ?? `\`\`\`${lang}\n${filename}\n\`\`\``, 
       files: [new AttachmentBuilder(Buffer.from(content), { name: filename })],
-      allowedMentions: { parse: [] },
+      allowedMentions: { parse: [] as never[] },
     };
-    
+
     if (thread && "send" in thread) {
       try {
         const message = await thread.send(payload);
@@ -315,15 +370,14 @@ export class DiscordRenderer {
         await this.clearDetailsThread("details-thread-content-upload-failed", error);
       }
     }
-    
-    // Fallback to channel
+
     const channel = await this.getTargetChannel();
     const message = await channel.send(payload);
     return { messageId: message.id, url: message.attachments.first()?.url };
   }
 
-  async postDetail(content, { fallbackToChannel = true } = {}) {
-    const payload = { content: content.slice(0, DISCORD_MESSAGE_LIMIT), allowedMentions: { parse: [] } };
+  async postDetail(content: string, { fallbackToChannel = true }: { fallbackToChannel?: boolean } = {}): Promise<boolean> {
+    const payload = { content: content.slice(0, DISCORD_MESSAGE_LIMIT), allowedMentions: { parse: [] as never[] } };
     const thread = await this.ensureDetailsThread();
     if (thread && "send" in thread && thread.type !== ChannelType.DM) {
       try {
@@ -339,15 +393,15 @@ export class DiscordRenderer {
     return true;
   }
 
-  createUploadPayload(filePath, options = {}) {
+  createUploadPayload(filePath: string, options: { title?: string } = {}) {
     return {
       content: options.title ?? `Uploaded ${basename(filePath)}`,
       files: [new AttachmentBuilder(filePath, { name: basename(filePath) })],
-      allowedMentions: { parse: [] },
+      allowedMentions: { parse: [] as never[] },
     };
   }
 
-  async uploadFile(filePath, options = {}) {
+  async uploadFile(filePath: string, options: { title?: string } = {}): Promise<{ messageId: string; url?: string }> {
     const thread = await this.ensureDetailsThread();
     if (thread && "send" in thread) {
       try {
@@ -369,46 +423,39 @@ export class DiscordRenderer {
     };
   }
 
-  handleSessionEvent(event) {
-    // Only log non-message_update events to reduce noise
+  handleSessionEvent(event: SessionEvent): void {
     if (event.type !== "message_update") {
-      this.logger.info("session-event", { 
+      this.logger.info("session-event", {
         routeKey: this.manifest.routeKey,
         eventType: event.type,
-        hasToolName: !!event.toolName
+        hasToolName: !!event.toolName,
       });
     }
-    
-    if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
-      this.currentAssistantText += event.assistantMessageEvent.delta;
+
+    if (event.type === "message_update" && event.assistantMessageEvent?.type === "text_delta") {
+      this.currentAssistantText += event.assistantMessageEvent.delta ?? "";
       this.sendIncrementalResponse();
     }
     if (event.type === "tool_execution_start") {
-      // Queue tool start operation to prevent races
       this.enqueueToolOperation(async () => {
-        // Only show indicator if this is the first tool (pendingTools was 0)
         const isFirstTool = this.pendingTools === 0;
         this.pendingTools++;
-        // Store parameters with unique key for each tool execution
         if (event.toolName) {
           const key = `${event.toolName}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-          this.currentToolKey = key; // Store for retrieval
+          this.currentToolKey = key;
           if (event.args) {
             this.toolParams.set(key, { name: event.toolName, params: event.args });
           }
         }
-        // Only show indicator for the first tool
         if (isFirstTool) {
           await this.showToolIndicator();
         }
       });
     }
     if (event.type === "tool_execution_end") {
-      // Queue tool end operation - runs after all queued operations
       this.enqueueToolOperation(async () => {
         const toolDisplay = `🛠️ **${event.toolName}**`;
-        
-        // Get stored parameters using the key from start
+
         const key = this.currentToolKey;
         const stored = key ? this.toolParams.get(key) : null;
         const params = stored?.params;
@@ -416,39 +463,31 @@ export class DiscordRenderer {
           this.toolParams.delete(key);
           this.currentToolKey = null;
         }
-        
-        // Extract content from tool result (pass params for diff generation)
+
         if (event.result) {
           const { content, filename, isDiff } = this.extractToolContent(event, params);
-          
+
           if (content) {
-            // Determine file extension and language for syntax highlighting
-            let ext = filename ? filename.split('.').pop() : 'txt';
-            if (event.toolName === 'read' && !filename) ext = 'txt';
-            if (isDiff) ext = 'diff';
-            
-            // Map extension to Discord language identifier
+            let ext = filename ? filename.split(".").pop() : "txt";
+            if (event.toolName === "read" && !filename) ext = "txt";
+            if (isDiff) ext = "diff";
+
             const lang = this.getLanguageFromExtension(ext);
-            
-            // Create display filename
             const displayFilename = filename || `${event.toolName}-result.${ext}`;
-            
+
             if (content.length > 1000) {
-              // Upload as file attachment
               await this.uploadContentToThread(displayFilename, content, lang, {
-                title: toolDisplay
+                title: toolDisplay,
               });
             } else {
-              // Wrap in appropriate codeblock with language
               const resultDisplay = `\n\`\`\`${lang}\n${content}\n\`\`\``;
               await this.postToolDetail(`${toolDisplay}${resultDisplay}`);
             }
           } else {
-            // Fallback to JSON if no content extracted
             const resultJson = JSON.stringify(event.result, null, 2);
             if (resultJson.length > 1000) {
-              await this.uploadContentToThread(`${event.toolName}-result.json`, resultJson, 'json', {
-                title: toolDisplay
+              await this.uploadContentToThread(`${event.toolName}-result.json`, resultJson, "json", {
+                title: toolDisplay,
               });
             } else {
               const resultDisplay = `\n\`\`\`json\n${resultJson}\n\`\`\``;
@@ -458,7 +497,7 @@ export class DiscordRenderer {
         } else {
           await this.postToolDetail(toolDisplay);
         }
-        
+
         this.pendingTools = Math.max(0, this.pendingTools - 1);
         if (this.pendingTools === 0) {
           await this.hideToolIndicator();
@@ -467,326 +506,294 @@ export class DiscordRenderer {
     }
   }
 
-  /**
-   * Extract readable content from tool result
-   * Returns { content, filename, isDiff }
-   */
-  extractToolContent(event, storedParams = null) {
+  extractToolContent(event: SessionEvent, storedParams: Record<string, unknown> | null = null): ExtractedContent {
     const result = event.result;
     if (!result) return { content: null, filename: null, isDiff: false };
-    
-    // Use stored params if available (from tool_execution_start), otherwise fallback to event.args
+
     const params = storedParams || event.args || {};
-    
-    // DEBUG: Log what we got
+
     this.logger.info("extract-tool-debug", {
       toolName: event.toolName,
       paramKeys: Object.keys(params),
       hasOldString: !!(params.old_string || params.search || params.oldString || params.old),
-      hasNewString: !!(params.new_string || params.replace || params.newString || params.new)
+      hasNewString: !!(params.new_string || params.replace || params.newString || params.new),
     });
-    
-    // Handle read tool - extract file content
-    if (event.toolName === 'read' && result.content) {
-      // SDK returns content as array of blocks
+
+    if (event.toolName === "read" && result.content) {
       if (Array.isArray(result.content)) {
-        const textBlock = result.content.find(c => c.type === 'text');
+        const textBlock = (result.content as Array<{ type: string; text?: string }>).find((c) => c.type === "text");
         if (textBlock && textBlock.text) {
-          return { 
-            content: textBlock.text, 
-            filename: result.filePath || result.path || params.filePath || params.path,
-            isDiff: false 
+          return {
+            content: textBlock.text,
+            filename: (result.filePath || result.path || params.filePath || params.path) as string | undefined,
+            isDiff: false,
           };
         }
       }
-      // Direct content string
-      if (typeof result.content === 'string') {
-        return { 
-          content: result.content, 
-          filename: result.filePath || result.path || params.filePath || params.path,
-          isDiff: false 
+      if (typeof result.content === "string") {
+        return {
+          content: result.content,
+          filename: (result.filePath || result.path || params.filePath || params.path) as string | undefined,
+          isDiff: false,
         };
       }
     }
-    
-    // Handle diff/edit tools - extract from result.details or parameters
-    if (event.toolName === 'str_replace' || event.toolName === 'edit' || event.toolName === 'apply_diff') {
-      const filePath = params.path || params.filePath || result.filePath || result.path;
-      
-      // SDK stores diff in result.details.diff
+
+    if (event.toolName === "str_replace" || event.toolName === "edit" || event.toolName === "apply_diff") {
+      const filePath = (params.path || params.filePath || result.filePath || result.path) as string | undefined;
+
       if (result.details?.diff) {
         return {
           content: result.details.diff,
-          filename: filePath,
-          isDiff: true
+          filename: filePath ?? null,
+          isDiff: true,
         };
       }
-      
-      // Try different parameter name conventions
-      const oldStr = params.oldText || params.old_string || params.search || params.oldString || params.old;
-      const newStr = params.newText || params.new_string || params.replace || params.newString || params.new;
-      
+
+      const oldStr = (params.oldText || params.old_string || params.search || params.oldString || params.old) as string | undefined;
+      const newStr = (params.newText || params.new_string || params.replace || params.newString || params.new) as string | undefined;
+
       if (oldStr && newStr) {
-        // Create a simple unified diff format
-        const diff = `--- ${filePath || 'original'}\n+++ ${filePath || 'modified'}\n@@ -1,1 +1,1 @@\n-${oldStr}\n+${newStr}`;
-        return { 
-          content: diff, 
-          filename: filePath,
-          isDiff: true 
+        const diff = `--- ${filePath || "original"}\n+++ ${filePath || "modified"}\n@@ -1,1 +1,1 @@\n-${oldStr}\n+${newStr}`;
+        return {
+          content: diff,
+          filename: filePath ?? null,
+          isDiff: true,
         };
       }
-      
-      // Fallback: show the success message if no diff available
+
       if (result.message) {
         return {
           content: result.message,
-          filename: filePath,
-          isDiff: false
+          filename: filePath ?? null,
+          isDiff: false,
         };
       }
     }
-    
-    // Handle read tools - extract file path for syntax highlighting
-    if (event.toolName === 'read' || event.toolName === 'read_file') {
-      const filePath = params.path || result.path || result.filePath;
-      
+
+    if (event.toolName === "read" || event.toolName === "read_file") {
+      const filePath = (params.path || result.path || result.filePath) as string | undefined;
+
       if (result.content) {
         if (Array.isArray(result.content)) {
-          const textBlock = result.content.find(c => c.type === 'text');
+          const textBlock = (result.content as Array<{ type: string; text?: string }>).find((c) => c.type === "text");
           if (textBlock && textBlock.text) {
-            return { content: textBlock.text, filename: filePath, isDiff: false };
+            return { content: textBlock.text, filename: filePath ?? null, isDiff: false };
           }
         }
-        if (typeof result.content === 'string') {
-          return { content: result.content, filename: filePath, isDiff: false };
+        if (typeof result.content === "string") {
+          return { content: result.content, filename: filePath ?? null, isDiff: false };
         }
       }
     }
-    
-    // Handle other tools - try to find any readable content
+
     if (result.content) {
       if (Array.isArray(result.content)) {
-        const textBlock = result.content.find(c => c.type === 'text');
+        const textBlock = (result.content as Array<{ type: string; text?: string }>).find((c) => c.type === "text");
         if (textBlock && textBlock.text) {
           return { content: textBlock.text, filename: null, isDiff: false };
         }
       }
-      if (typeof result.content === 'string') {
+      if (typeof result.content === "string") {
         return { content: result.content, filename: null, isDiff: false };
       }
     }
-    
+
     return { content: null, filename: null, isDiff: false };
   }
 
-  async sendIncrementalResponse() {
+  async sendIncrementalResponse(): Promise<void> {
     const fullText = this.currentAssistantText;
-    
-    // Safety: nothing to send or all already sent
+
     if (!fullText || this.lastSentIndex >= fullText.length) {
       return;
     }
-    
+
     const unsentText = fullText.slice(this.lastSentIndex).trimStart();
-    
-    // Not enough content to send yet
+
     if (!unsentText || unsentText.length < 20) {
       return;
     }
-    
-    // Find a good break point
+
     let sendLength = 0;
-    
-    // Check for paragraph break first
-    const paraBreakIndex = unsentText.indexOf('\n\n');
+
+    const paraBreakIndex = unsentText.indexOf("\n\n");
     if (paraBreakIndex >= 0) {
       sendLength = paraBreakIndex + 2;
     } else {
-      // Check for sentence ending - require at least 50 chars
       const sentenceMatch = unsentText.match(/.*[.!?]\s+/s);
       if (sentenceMatch && sentenceMatch[0].length >= 50) {
         sendLength = sentenceMatch[0].length;
       } else {
-        return; // No good break yet
+        return;
       }
     }
-    
-    // Don't break inside code blocks
+
     const textToSend = unsentText.slice(0, sendLength).trim();
     if ((textToSend.match(/```/g) || []).length % 2 === 1) {
       return;
     }
-    
+
     if (!textToSend || textToSend.length < 30) {
       return;
     }
-    
-    // Update index and send immediately (queue prevents duplicates)
+
     this.lastSentIndex += sendLength;
     await this.sendTextChunk(textToSend);
   }
-  
-  async sendTextChunk(text) {
+
+  async sendTextChunk(text: string): Promise<void> {
     try {
       const channel = await this.getTargetChannel();
-      const message = await channel.send({ 
-        content: text.slice(0, DISCORD_MESSAGE_LIMIT), 
-        allowedMentions: { parse: [] } 
+      const message = await channel.send({
+        content: text.slice(0, DISCORD_MESSAGE_LIMIT),
+        allowedMentions: { parse: [] as never[] },
       });
-      
+
       this.lastMessageId = message.id;
       this.lastSentContent = text;
-      
-      await this.logger.info("message-sent", { 
+
+      await this.logger.info("message-sent", {
         routeKey: this.manifest.routeKey,
-        messageId: message.id 
+        messageId: message.id,
       });
     } catch (error) {
       await this.logger.warn("text-send-failed", { error: String(error) });
     }
   }
 
-  async postToolDetail(content) {
-    // MUST use tool indicator message as thread anchor - never text messages
+  async postToolDetail(content: string): Promise<void> {
     if (!this.toolIndicatorMessageId) {
       await this.showToolIndicator();
     }
     const threadAnchorId = this.toolIndicatorMessageId;
-    
-    // If still no indicator, something is wrong
+
     if (!threadAnchorId) {
-      await this.logger.error("tool-thread-fatal", { 
+      await this.logger.error("tool-thread-fatal", {
         routeKey: this.manifest.routeKey,
-        error: "Failed to create indicator anchor"
+        error: "Failed to create indicator anchor",
       });
       return;
     }
-    
-    // Create thread off anchor message if not exists
+
     if (!this.manifest.detailsThreadId && this.enableDetailsThreads) {
       try {
         const channel = await this.getTargetChannel();
         if ("messages" in channel) {
           const message = await channel.messages.fetch(threadAnchorId);
-          if (typeof message.startThread === "function") {
-            const thread = await message.startThread({
+          if (typeof (message as any).startThread === "function") {
+            const thread = await (message as any).startThread({
               name: "Tool calls",
               autoArchiveDuration: 60,
             });
             this.manifest.detailsThreadId = thread.id;
-            // Don't persist - thread is ephemeral per request
-            await this.logger.info("tool-thread-created", { 
-              routeKey: this.manifest.routeKey, 
+            await this.logger.info("tool-thread-created", {
+              routeKey: this.manifest.routeKey,
               threadId: thread.id,
               anchoredTo: threadAnchorId,
-              isIndicator: threadAnchorId === this.toolIndicatorMessageId
+              isIndicator: threadAnchorId === this.toolIndicatorMessageId,
             });
-            
-            // Post directly to the newly created thread
+
             try {
-              await thread.send({ 
-                content: content.slice(0, DISCORD_MESSAGE_LIMIT), 
-                allowedMentions: { parse: [] } 
+              await thread.send({
+                content: content.slice(0, DISCORD_MESSAGE_LIMIT),
+                allowedMentions: { parse: [] as never[] },
               });
-              await this.logger.info("tool-detail-posted", { 
-                routeKey: this.manifest.routeKey, 
-                content: content.slice(0, 50),
-                threadId: thread.id
-              });
-              return; // Done - posted to new thread
-            } catch (err) {
-              await this.logger.warn("tool-detail-post-failed", { 
+              await this.logger.info("tool-detail-posted", {
                 routeKey: this.manifest.routeKey,
                 content: content.slice(0, 50),
-                error: String(err) 
+                threadId: thread.id,
+              });
+              return;
+            } catch (err) {
+              await this.logger.warn("tool-detail-post-failed", {
+                routeKey: this.manifest.routeKey,
+                content: content.slice(0, 50),
+                error: String(err),
               });
               return;
             }
           }
         }
       } catch (err) {
-        await this.logger.warn("tool-thread-create-failed", { 
-          routeKey: this.manifest.routeKey, 
+        await this.logger.warn("tool-thread-create-failed", {
+          routeKey: this.manifest.routeKey,
           threadAnchorId,
-          error: String(err) 
+          error: String(err),
         });
       }
     }
-    
-    // If we already have a thread, use existing logic
+
     const thread = await this.ensureDetailsThread();
     if (thread && "send" in thread) {
       try {
-        await thread.send({ 
-          content: content.slice(0, DISCORD_MESSAGE_LIMIT), 
-          allowedMentions: { parse: [] } 
+        await thread.send({
+          content: content.slice(0, DISCORD_MESSAGE_LIMIT),
+          allowedMentions: { parse: [] as never[] },
         });
-        await this.logger.info("tool-detail-posted-existing", { 
-          routeKey: this.manifest.routeKey, 
-          content: content.slice(0, 50) 
-        });
-      } catch (err) {
-        await this.logger.warn("tool-detail-post-failed", { 
+        await this.logger.info("tool-detail-posted-existing", {
           routeKey: this.manifest.routeKey,
           content: content.slice(0, 50),
-          error: String(err) 
+        });
+      } catch (err) {
+        await this.logger.warn("tool-detail-post-failed", {
+          routeKey: this.manifest.routeKey,
+          content: content.slice(0, 50),
+          error: String(err),
         });
       }
     }
   }
 
-  async showToolIndicator() {
-    // Guard against concurrent creation
+  async showToolIndicator(): Promise<void> {
     if (this.creatingIndicator) return;
-    if (this.toolIndicatorMessageId) return; // Already showing
-    
+    if (this.toolIndicatorMessageId) return;
+
     this.creatingIndicator = true;
-    
+
     try {
       const channel = await this.getTargetChannel();
-      const indicator = await channel.send({ 
-        content: "🛠️ Using tools...", 
-        allowedMentions: { parse: [] } 
+      const indicator = await channel.send({
+        content: "🛠️ Using tools...",
+        allowedMentions: { parse: [] as never[] },
       });
       this.toolIndicatorMessageId = indicator.id;
-      this.lastMessageId = indicator.id; // Use as thread anchor
-      await this.logger.info("tool-indicator-shown", { 
+      this.lastMessageId = indicator.id;
+      await this.logger.info("tool-indicator-shown", {
         routeKey: this.manifest.routeKey,
-        messageId: indicator.id 
+        messageId: indicator.id,
       });
     } catch (err) {
-      await this.logger.warn("tool-indicator-failed", { 
+      await this.logger.warn("tool-indicator-failed", {
         routeKey: this.manifest.routeKey,
-        error: String(err) 
+        error: String(err),
       });
     } finally {
       this.creatingIndicator = false;
     }
   }
 
-  async hideToolIndicator() {
-    // Just clear the tracking - don't edit the message
+  async hideToolIndicator(): Promise<void> {
     this.toolIndicatorMessageId = undefined;
     this.creatingIndicator = false;
   }
 
-  async renderQueued(item) {
+  async renderQueued(item: QueueItem): Promise<void> {
     this.currentAssistantText = "";
     this.lastSentIndex = 0;
     this.lastSentContent = undefined;
     this.creatingPlaceholder = false;
     this.pendingTools = 0;
     this.toolIndicatorMessageId = undefined;
-    // Reset thread ID - each request gets its own fresh thread (ephemeral)
     this.manifest.detailsThreadId = undefined;
     this.startTyping();
   }
 
-  async renderRunning(item) {
+  async renderRunning(item: QueueItem): Promise<void> {
     this.startTyping();
   }
 
-  startTyping() {
+  startTyping(): void {
     this.stopTyping();
     this.sendTyping();
     this.typingInterval = setInterval(() => {
@@ -794,57 +801,54 @@ export class DiscordRenderer {
     }, 8000);
   }
 
-  async sendTyping() {
+  async sendTyping(): Promise<void> {
     try {
       const channel = await this.getTargetChannel();
       if (channel && "sendTyping" in channel) {
-        await channel.sendTyping();
+        await (channel as any).sendTyping();
       }
     } catch {
       // Ignore typing errors
     }
   }
 
-  stopTyping() {
+  stopTyping(): void {
     if (this.typingInterval) {
       clearInterval(this.typingInterval);
       this.typingInterval = undefined;
     }
   }
 
-  async renderSuccess() {
+  async renderSuccess(): Promise<void> {
     this.stopTyping();
-    // Send any remaining unsent text
     const remaining = this.currentAssistantText.slice(this.lastSentIndex).trim();
     if (remaining) {
-      // Check if we already sent this exact content
       const normalizedLast = this.lastSentContent?.trim();
       const normalizedCurrent = remaining.trim();
       if (normalizedLast !== normalizedCurrent) {
         try {
           const channel = await this.getTargetChannel();
-          const message = await channel.send({ content: remaining.slice(0, DISCORD_MESSAGE_LIMIT), allowedMentions: { parse: [] } });
+          const message = await channel.send({ content: remaining.slice(0, DISCORD_MESSAGE_LIMIT), allowedMentions: { parse: [] as never[] } });
           this.lastSentContent = normalizedCurrent;
           this.lastMessageId = message.id;
-          await this.logger.info("success-remaining-sent", { 
+          await this.logger.info("success-remaining-sent", {
             routeKey: this.manifest.routeKey,
             messageId: message.id,
-            content: normalizedCurrent.slice(0, 50)
+            content: normalizedCurrent.slice(0, 50),
           });
         } catch (err) {
-          await this.logger.warn("success-remaining-failed", { 
+          await this.logger.warn("success-remaining-failed", {
             routeKey: this.manifest.routeKey,
-            error: String(err) 
+            error: String(err),
           });
         }
       } else {
-        await this.logger.info("success-duplicate-prevented", { 
+        await this.logger.info("success-duplicate-prevented", {
           routeKey: this.manifest.routeKey,
-          content: normalizedCurrent.slice(0, 50)
+          content: normalizedCurrent.slice(0, 50),
         });
       }
     }
-    // Reset for next request
     this.currentAssistantText = "";
     this.lastSentIndex = 0;
     this.lastSentContent = undefined;
@@ -852,21 +856,21 @@ export class DiscordRenderer {
     this.toolIndicatorMessageId = undefined;
   }
 
-  async renderCancelled(reason = "Stopped.") {
+  async renderCancelled(reason = "Stopped."): Promise<void> {
     this.stopTyping();
     try {
       const channel = await this.getTargetChannel();
-      await channel.send({ content: `*${reason}*`, allowedMentions: { parse: [] } });
+      await channel.send({ content: `*${reason}*`, allowedMentions: { parse: [] as never[] } });
     } catch {
       // Ignore send errors
     }
   }
 
-  async renderFailure(error) {
+  async renderFailure(error: unknown): Promise<void> {
     this.stopTyping();
     try {
       const channel = await this.getTargetChannel();
-      await channel.send({ content: `**Error:** ${String(error).slice(0, 1800)}`, allowedMentions: { parse: [] } });
+      await channel.send({ content: `**Error:** ${String(error).slice(0, 1800)}`, allowedMentions: { parse: [] as never[] } });
     } catch {
       // Ignore send errors
     }

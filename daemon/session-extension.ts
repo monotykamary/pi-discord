@@ -1,5 +1,5 @@
 import { Type } from "@sinclair/typebox";
-import type { Pi } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionUIContext } from "@mariozechner/pi-coding-agent";
 
 export interface RuntimeInterface {
   getInjectedContext: () => Promise<string>;
@@ -7,7 +7,7 @@ export interface RuntimeInterface {
 }
 
 export function createRouteSessionExtension(runtime: RuntimeInterface) {
-  return (pi: Pi) => {
+  return (pi: ExtensionAPI) => {
     pi.on("context", async (event) => {
       const injectedText = await runtime.getInjectedContext();
       if (!injectedText.trim()) return undefined;

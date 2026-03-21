@@ -79,6 +79,7 @@ export interface PiDiscordConfig {
   triggerWords: string[];
   triggerWarmOnly: boolean;
   hotZoneMinutes: number;
+  [key: string]: unknown;
 }
 
 export function createDefaultConfig(paths: Paths): PiDiscordConfig {

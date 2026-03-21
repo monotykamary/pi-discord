@@ -18,7 +18,7 @@ export interface HeadlessUi {
   setEditorComponent: () => undefined;
 }
 
-export function createHeadlessUi(): HeadlessUi {
+export function createHeadlessUi(): any {
   const noop = () => undefined;
   return {
     select: async () => undefined,

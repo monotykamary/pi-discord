@@ -1,41 +1,42 @@
 import path from "node:path";
 import { readFile, writeFile } from "node:fs/promises";
-import {
+import type {
   Client,
+  Message,
+  ChatInputCommandInteraction,
+  ButtonInteraction,
+  Interaction,
+  Collection,
+  Channel,
+  GuildTextBasedChannel,
+} from "discord.js";
+import {
   Events,
-  GatewayIntentBits,
-  Partials,
 } from "discord.js";
 import { authorizeInteraction } from "./authz.js";
-import { JournalStore } from "./journal.js";
-import { Logger } from "./logger.js";
-import { buildPromptText } from "./prompt-shaper.js";
-import { RouteQueueStore } from "./queue-store.js";
+import { JournalStore, type JournalEntry } from "./journal.js";
+import type { Logger } from "./logger.js";
+import { buildPromptText, type AttachmentInfo } from "./prompt-shaper.js";
+import { RouteQueueStore, type QueueItem, type QueueAttachment } from "./queue-store.js";
 import { DiscordRenderer } from "./renderer.js";
-import { RouteRegistry, createRouteManifest } from "./registry.js";
-import { makeRouteKey, formatRoute } from "./route-key.js";
+import { RouteRegistry, createRouteManifest, type RouteManifest } from "./registry.js";
+import { makeRouteKey, formatRoute, type ScopeInfo } from "./route-key.js";
 import { RouteSessionHost } from "./session-host.js";
 import { ensureDir, pathExists, removeIfExists, writeJson } from "../lib/fs.js";
-import { getRoutePaths } from "../lib/paths.js";
+import { getRoutePaths, type Paths, type RoutePaths } from "../lib/paths.js";
+import type { PiDiscordConfig } from "../lib/config.js";
 
-function stripBotMention(content, botId) {
+function stripBotMention(content: string, botId: string): string {
   return content
     .replace(new RegExp(`<@!?${botId}>`, "g"), "")
     .trim();
 }
 
-/**
- * Check if content contains a trigger word as a standalone word.
- * @param {string | undefined} content
- * @param {string[]} triggerWords
- * @returns {string | undefined} The matched trigger word, or undefined if no match
- */
-function findTriggerWord(content, triggerWords) {
+function findTriggerWord(content: string | undefined, triggerWords: string[]): string | undefined {
   if (!content || triggerWords.length === 0) return undefined;
   const lowerContent = content.toLowerCase();
   for (const word of triggerWords) {
     const lowerWord = word.toLowerCase();
-    // Check as standalone word using word boundaries
     const regex = new RegExp(`\\b${escapeRegExp(lowerWord)}\\b`, "i");
     if (regex.test(lowerContent)) {
       return word;
@@ -44,27 +45,16 @@ function findTriggerWord(content, triggerWords) {
   return undefined;
 }
 
-/**
- * Remove the trigger word from the beginning of content if present.
- * @param {string} content
- * @param {string} triggerWord
- * @returns {string}
- */
-function stripTriggerWord(content, triggerWord) {
+function stripTriggerWord(content: string, triggerWord: string): string {
   const regex = new RegExp(`^\\s*\\b${escapeRegExp(triggerWord)}\\b[\\s:,;-]*`, "i");
   return content.replace(regex, "").trim();
 }
 
-/**
- * Escape special regex characters.
- * @param {string} string
- * @returns {string}
- */
-function escapeRegExp(string) {
+function escapeRegExp(string: string): string {
   return string.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-async function toImageContent(filePath, mediaType) {
+async function toImageContent(filePath: string, mediaType: string): Promise<unknown> {
   const data = await readFile(filePath);
   return {
     type: "image",
@@ -76,38 +66,59 @@ async function toImageContent(filePath, mediaType) {
   };
 }
 
+export interface RouteContext {
+  manifest: RouteManifest;
+  routePaths: RoutePaths;
+  queue: RouteQueueStore;
+  journal: JournalStore;
+  renderer: DiscordRenderer;
+  host: RouteSessionHost;
+}
+
+export interface ActiveRun {
+  abort: () => Promise<void>;
+}
+
+export interface DaemonStatus {
+  phase?: string;
+  userTag?: string;
+  pid?: number;
+  routeCount?: number;
+  activeRuns?: string[];
+}
+
 export class PiDiscordDaemon {
-  /**
-   * @param {{
-   *   paths: ReturnType<import('../lib/paths.js').getPaths>,
-   *   config: import('../lib/config.js').PiDiscordConfig,
-   * }} options
-   */
-  constructor(options) {
+  private paths: Paths;
+  private config: PiDiscordConfig;
+  private logger: Logger;
+  private registry: RouteRegistry;
+  private client: Client;
+  private routeContexts: Map<string, RouteContext>;
+  private routePromises: Map<string, Promise<RouteContext>>;
+  private currentRuns: Map<string, ActiveRun>;
+  private userHotZones: Map<string, number>;
+  private workerId: string;
+  private heartbeat: NodeJS.Timeout | undefined;
+  private stopping: boolean;
+  private status: DaemonStatus;
+
+  constructor(options: { paths: Paths; config: PiDiscordConfig; client: Client; logger: Logger }) {
     this.paths = options.paths;
     this.config = options.config;
-    this.logger = new Logger(this.paths.daemonLogPath);
+    this.logger = options.logger;
     this.registry = new RouteRegistry(this.paths);
-    this.client = new Client({
-      intents: [
-        GatewayIntentBits.Guilds,
-        GatewayIntentBits.GuildMessages,
-        GatewayIntentBits.MessageContent,
-        GatewayIntentBits.DirectMessages,
-      ],
-      partials: [Partials.Channel, Partials.Message],
-    });
+    this.client = options.client;
     this.routeContexts = new Map();
     this.routePromises = new Map();
     this.currentRuns = new Map();
-    this.userHotZones = new Map(); // key: `${routeKey}:${userId}`, value: expiryTimestamp
+    this.userHotZones = new Map();
     this.workerId = `daemon-${process.pid}`;
     this.heartbeat = undefined;
     this.stopping = false;
     this.status = {};
   }
 
-  runInBackground(label, task, details = {}) {
+  runInBackground(label: string, task: () => Promise<void>, details: Record<string, unknown> = {}): void {
     void Promise.resolve()
       .then(task)
       .catch(async (error) => {
@@ -115,7 +126,7 @@ export class PiDiscordDaemon {
       });
   }
 
-  async start() {
+  async start(): Promise<void> {
     await ensureDir(this.paths.workspaceDir);
     await ensureDir(this.paths.runDir);
     await ensureDir(this.paths.logsDir);
@@ -130,24 +141,24 @@ export class PiDiscordDaemon {
     }, 15_000);
   }
 
-  attachEventHandlers() {
+  attachEventHandlers(): void {
     this.client.once(Events.ClientReady, async (client) => {
-      await this.logger.info("discord-ready", { userId: client.user.id, tag: client.user.tag });
-      await this.writeStatus({ phase: "ready", userTag: client.user.tag });
+      await this.logger.info("discord-ready", { userId: client.user?.id, tag: client.user?.tag });
+      await this.writeStatus({ phase: "ready", userTag: client.user?.tag });
       await this.reconcileKnownRoutes();
       await this.scheduleWork();
     });
 
     this.client.on(Events.MessageCreate, async (message) => {
       try {
-        await this.handleMessageCreate(message);
+        await this.handleMessageCreate(message as Message);
       } catch (error) {
         await this.logger.error("message-create-failed", { error: String(error) });
       }
     });
 
     this.client.on(Events.MessageUpdate, async (_previousMessage, nextMessage) => {
-      let message = nextMessage;
+      let message = nextMessage as Message;
       try {
         if (!message?.id || !message.channelId) return;
         if (message.partial) {
@@ -163,7 +174,7 @@ export class PiDiscordDaemon {
         }
         if (!authorizeInteraction(message, this.config).allowed) return;
 
-        const scope = this.resolveScopeFromChannel(message.guildId ?? null, message.channelId, message.channel);
+        const scope = this.resolveScopeFromChannel(message.guildId ?? null, message.channelId, message.channel as Channel);
         const route = await this.getExistingRoute(scope);
         if (!route) return;
         if (!route.journal.hasSource(message.id) && !route.queue.hasSource(message.id)) {
@@ -178,7 +189,7 @@ export class PiDiscordDaemon {
           text: message.content ?? "",
           authorId: message.author?.id,
           authorName: message.author?.username,
-        });
+        } as JournalEntry);
         const replyContext = message.reference?.messageId ? await this.fetchReplyContext(message) : undefined;
         await route.queue.replaceQueuedBySource(message.id, (item) => {
           const rawText = item.source.trigger === "mention" && this.client.user
@@ -206,7 +217,7 @@ export class PiDiscordDaemon {
         if (message.guildId && this.config.allowedGuildIds.length > 0 && !this.config.allowedGuildIds.includes(message.guildId)) {
           return;
         }
-        const scope = this.resolveScopeFromChannel(message.guildId ?? null, message.channelId, message.channel);
+        const scope = this.resolveScopeFromChannel(message.guildId ?? null, message.channelId, message.channel as Channel);
         const route = await this.getExistingRoute(scope);
         if (!route) return;
         if (!route.journal.hasSource(message.id) && !route.queue.hasSource(message.id)) {
@@ -217,7 +228,7 @@ export class PiDiscordDaemon {
           sourceId: message.id,
           timestamp: Date.now(),
           routeKey: route.manifest.routeKey,
-        });
+        } as JournalEntry);
         await route.queue.cancelQueuedBySource(message.id, "Source message was deleted before execution.");
       } catch (error) {
         await this.logger.error("message-delete-failed", { error: String(error) });
@@ -227,18 +238,20 @@ export class PiDiscordDaemon {
     this.client.on(Events.InteractionCreate, async (interaction) => {
       try {
         if (!interaction.isChatInputCommand() && !interaction.isButton()) return;
-        await this.handleInteraction(interaction);
+        await this.handleInteraction(interaction as ChatInputCommandInteraction | ButtonInteraction);
       } catch (error) {
         await this.logger.error("interaction-failed", { error: String(error) });
         if (interaction.isRepliable()) {
-          const responder = interaction.deferred || interaction.replied ? interaction.followUp.bind(interaction) : interaction.reply.bind(interaction);
+          const responder = interaction.deferred || interaction.replied 
+            ? interaction.followUp.bind(interaction) 
+            : interaction.reply.bind(interaction);
           await responder({ content: String(error), ephemeral: true }).catch(() => undefined);
         }
       }
     });
   }
 
-  resolveScope(guildId, channelId, threadId) {
+  resolveScope(guildId: string | null, channelId: string, threadId: string | null): ScopeInfo & { routeKey: string } {
     return {
       guildId,
       channelId,
@@ -247,32 +260,23 @@ export class PiDiscordDaemon {
     };
   }
 
-  resolveScopeFromChannel(guildId, channelId, channel) {
-    const isThread = channel?.isThread?.() ?? false;
+  resolveScopeFromChannel(guildId: string | null, channelId: string, channel: Channel | null): ScopeInfo & { routeKey: string } {
+    const isThread = (channel as any)?.isThread?.() ?? false;
     return this.resolveScope(
       guildId,
-      isThread ? (channel.parentId ?? channelId) : channelId,
-      isThread ? channel.id : null,
+      isThread ? ((channel as any).parentId ?? channelId) : channelId,
+      isThread ? channelId : null,
     );
   }
 
-  /**
-   * Check if message content contains a configured trigger word.
-   * Respects triggerWarmOnly setting - returns undefined if warm-only and no existing route.
-   * @param {string | undefined} content
-   * @returns {string | undefined}
-   */
-  checkTriggerWord(content) {
+  checkTriggerWord(content: string | undefined): string | undefined {
     if (!this.config.triggerWarmOnly) {
-      // Cold start allowed - always check for triggers
       return findTriggerWord(content, this.config.triggerWords);
     }
-    // Warm-only mode: triggers require existing route (checked by caller via getExistingRoute)
-    // Just do the text match here, route existence is verified separately
     return findTriggerWord(content, this.config.triggerWords);
   }
 
-  async getExistingRoute(scope) {
+  async getExistingRoute(scope: ScopeInfo & { routeKey: string }): Promise<RouteContext | undefined> {
     if (this.routeContexts.has(scope.routeKey)) {
       return this.routeContexts.get(scope.routeKey);
     }
@@ -282,9 +286,9 @@ export class PiDiscordDaemon {
     return this.ensureRoute(scope);
   }
 
-  async ensureRoute(scope) {
+  async ensureRoute(scope: ScopeInfo & { routeKey: string }): Promise<RouteContext> {
     if (this.routeContexts.has(scope.routeKey)) {
-      return this.routeContexts.get(scope.routeKey);
+      return this.routeContexts.get(scope.routeKey)!;
     }
     if (!this.routePromises.has(scope.routeKey)) {
       const routePromise = this.createRouteContext(scope)
@@ -295,12 +299,12 @@ export class PiDiscordDaemon {
         });
       this.routePromises.set(scope.routeKey, routePromise);
     }
-    return this.routePromises.get(scope.routeKey);
+    return this.routePromises.get(scope.routeKey)!;
   }
 
-  async createRouteContext(scope) {
+  private async createRouteContext(scope: ScopeInfo & { routeKey: string }): Promise<RouteContext> {
     if (this.routeContexts.has(scope.routeKey)) {
-      return this.routeContexts.get(scope.routeKey);
+      return this.routeContexts.get(scope.routeKey)!;
     }
 
     const routePaths = getRoutePaths(this.paths, scope.routeKey);
@@ -309,7 +313,7 @@ export class PiDiscordDaemon {
       const override = this.config.routeOverrides[scope.routeKey] ?? {};
       const workspaceMode = override.mode ?? this.config.workspaceMode;
       const executionRoot = workspaceMode === "shared"
-        ? (override.executionRoot ?? this.config.sharedExecutionRoot)
+        ? (override.executionRoot ?? this.config.sharedExecutionRoot!)
         : routePaths.dedicatedExecutionRoot;
       if (!executionRoot) throw new Error(`No execution root configured for ${scope.routeKey}`);
       const memoryPath = workspaceMode === "dedicated"
@@ -364,7 +368,7 @@ export class PiDiscordDaemon {
       uploadFile: (filePath, options) => renderer.uploadFile(filePath, options),
     });
 
-    const context = { manifest, routePaths, queue, journal, renderer, host };
+    const context: RouteContext = { manifest, routePaths, queue, journal, renderer, host };
     this.routeContexts.set(scope.routeKey, context);
     this.runInBackground("status-write-failed", async () => {
       await this.writeStatus();
@@ -372,7 +376,7 @@ export class PiDiscordDaemon {
     return context;
   }
 
-  async handleMessageCreate(message) {
+  async handleMessageCreate(message: Message): Promise<void> {
     if (!this.client.user || message.author?.bot) return;
     const authorization = authorizeInteraction(message, this.config);
     if (!authorization.allowed) return;
@@ -381,15 +385,13 @@ export class PiDiscordDaemon {
     const isDm = !message.guildId;
     const triggerMatch = this.checkTriggerWord(message.content);
 
-    // Determine if this is a warm-route trigger (not mention/DM)
     const isWarmTrigger = !botMentioned && !isDm && triggerMatch;
 
-    const scope = this.resolveScopeFromChannel(message.guildId ?? null, message.channelId, message.channel);
+    const scope = this.resolveScopeFromChannel(message.guildId ?? null, message.channelId, message.channel as Channel);
     const hotZoneKey = `${scope.routeKey}:${message.author.id}`;
     const now = Date.now();
     const inHotZone = (this.userHotZones.get(hotZoneKey) ?? 0) > now;
 
-    // Check if we should process this message
     const shouldProcess = botMentioned || isDm || triggerMatch || inHotZone;
     if (!shouldProcess) {
       const route = await this.getExistingRoute(scope);
@@ -402,28 +404,26 @@ export class PiDiscordDaemon {
         text: message.content ?? "",
         authorId: message.author.id,
         authorName: message.author.username,
-      });
+      } as JournalEntry);
       return;
     }
 
-    // For warm triggers, only use existing routes (don't create new ones)
     const route = isWarmTrigger
       ? await this.getExistingRoute(scope)
       : await this.ensureRoute(scope);
 
-    if (!route) return; // Warm trigger with no existing route - drop silently
+    if (!route) return;
     if (route.journal.hasSource(message.id) || route.queue.hasSource(message.id)) return;
 
-    // Extend hot zone on explicit triggers (mention, DM, trigger word) but not on hot zone continuation
     const isExplicitTrigger = botMentioned || isDm || triggerMatch;
     if (isExplicitTrigger && this.config.hotZoneMinutes > 0) {
       const expiry = now + this.config.hotZoneMinutes * 60_000;
       this.userHotZones.set(hotZoneKey, expiry);
     }
 
-    const savedAttachments = await this.saveInboundAttachments(route, message.attachments.values(), message.id);
+    const savedAttachments = await this.saveInboundAttachments(route, [...message.attachments.values()], message.id);
     const replyContext = message.reference?.messageId ? await this.fetchReplyContext(message) : undefined;
-    let rawText;
+    let rawText: string;
     if (botMentioned) {
       rawText = stripBotMention(message.content ?? "", this.client.user.id);
     } else if (triggerMatch) {
@@ -442,7 +442,6 @@ export class PiDiscordDaemon {
       savedAttachments,
     });
 
-    // Start typing indicator - response will be sent as new message when ready
     await route.renderer.startTyping();
 
     await route.journal.append({
@@ -455,7 +454,7 @@ export class PiDiscordDaemon {
       authorId: message.author.id,
       authorName: message.author.username,
       attachments: savedAttachments,
-    });
+    } as JournalEntry);
 
     const item = await route.queue.enqueue({
       source: {
@@ -477,7 +476,7 @@ export class PiDiscordDaemon {
     await this.scheduleWork();
   }
 
-  async handleInteraction(interaction) {
+  async handleInteraction(interaction: ChatInputCommandInteraction | ButtonInteraction): Promise<void> {
     if (interaction.isButton()) {
       const [namespace, action, routeKey] = interaction.customId.split(":");
       if (namespace !== "pi-discord" || action !== "stop" || !routeKey) {
@@ -493,7 +492,7 @@ export class PiDiscordDaemon {
         return;
       }
       const stopped = await this.abortRoute(routeKey);
-      const scope = this.resolveScopeFromChannel(interaction.guildId ?? null, interaction.channelId, interaction.channel);
+      const scope = this.resolveScopeFromChannel(interaction.guildId ?? null, interaction.channelId, interaction.channel as Channel);
       await interaction.reply({
         content: stopped ? `Stop requested for ${formatRoute(scope)}.` : `No active run for ${formatRoute(scope)}.`,
         ephemeral: true,
@@ -507,7 +506,9 @@ export class PiDiscordDaemon {
     const authorization = authorizeInteraction(interaction, this.config);
     if (!authorization.allowed) {
       if (interaction.isRepliable()) {
-        const responder = interaction.deferred || interaction.replied ? interaction.followUp.bind(interaction) : interaction.reply.bind(interaction);
+        const responder = interaction.deferred || interaction.replied 
+          ? interaction.followUp.bind(interaction) 
+          : interaction.reply.bind(interaction);
         await responder({ content: authorization.reason ?? "Not allowed.", ephemeral: true });
       }
       return;
@@ -515,7 +516,7 @@ export class PiDiscordDaemon {
 
     const subcommand = interaction.options.getSubcommand();
     if (subcommand === "status") {
-      const scope = this.resolveScopeFromChannel(interaction.guildId ?? null, interaction.channelId, interaction.channel);
+      const scope = this.resolveScopeFromChannel(interaction.guildId ?? null, interaction.channelId, interaction.channel as Channel);
       const route = await this.getExistingRoute(scope);
       if (!route) {
         await interaction.reply({ content: `Route ${formatRoute(scope)} has no saved state yet.`, ephemeral: true });
@@ -532,7 +533,7 @@ export class PiDiscordDaemon {
         await interaction.reply({ content: "Only admin Discord user ids may stop active runs.", ephemeral: true });
         return;
       }
-      const scope = this.resolveScopeFromChannel(interaction.guildId ?? null, interaction.channelId, interaction.channel);
+      const scope = this.resolveScopeFromChannel(interaction.guildId ?? null, interaction.channelId, interaction.channel as Channel);
       const stopped = await this.abortRoute(scope.routeKey);
       await interaction.reply({
         content: stopped ? `Stop requested for ${formatRoute(scope)}.` : `No active run for ${formatRoute(scope)}.`,
@@ -546,7 +547,7 @@ export class PiDiscordDaemon {
         await interaction.reply({ content: "Only admin Discord user ids may reset routes.", ephemeral: true });
         return;
       }
-      const scope = this.resolveScopeFromChannel(interaction.guildId ?? null, interaction.channelId, interaction.channel);
+      const scope = this.resolveScopeFromChannel(interaction.guildId ?? null, interaction.channelId, interaction.channel as Channel);
       await this.abortRoute(scope.routeKey);
       const route = await this.getExistingRoute(scope);
       if (!route) {
@@ -563,7 +564,7 @@ export class PiDiscordDaemon {
     if (subcommand !== "ask") return;
 
     const rawText = interaction.options.getString("text", true).trim();
-    const scope = this.resolveScopeFromChannel(interaction.guildId ?? null, interaction.channelId, interaction.channel);
+    const scope = this.resolveScopeFromChannel(interaction.guildId ?? null, interaction.channelId, interaction.channel as Channel);
     const route = await this.ensureRoute(scope);
     if (route.journal.hasSource(interaction.id) || route.queue.hasSource(interaction.id)) {
       await interaction.reply({ content: "That interaction was already queued.", ephemeral: true });
@@ -579,7 +580,6 @@ export class PiDiscordDaemon {
       savedAttachments: [],
     });
 
-    // Start typing indicator - response will be sent as new message when ready
     await route.renderer.startTyping();
     await interaction.deferReply({ ephemeral: false });
     await interaction.deleteReply();
@@ -593,7 +593,7 @@ export class PiDiscordDaemon {
       promptText,
       authorId: interaction.user.id,
       authorName: interaction.user.username,
-    });
+    } as JournalEntry);
 
     const item = await route.queue.enqueue({
       source: {
@@ -615,9 +615,9 @@ export class PiDiscordDaemon {
     await this.scheduleWork();
   }
 
-  async saveInboundAttachments(route, attachments, sourceId) {
-    const saved = [];
-    for (const attachment of attachments) {
+  async saveInboundAttachments(route: RouteContext, attachments: unknown[], sourceId: string): Promise<AttachmentInfo[]> {
+    const saved: AttachmentInfo[] = [];
+    for (const attachment of attachments as { id: string; name?: string; url: string; contentType?: string }[]) {
       const extension = path.extname(attachment.name ?? "") || ".bin";
       const filePath = path.join(route.routePaths.inboundAttachmentsDir, `${sourceId}-${attachment.id}${extension}`);
       const response = await fetch(attachment.url);
@@ -627,17 +627,16 @@ export class PiDiscordDaemon {
       const buffer = Buffer.from(await response.arrayBuffer());
       await writeFile(filePath, buffer);
       saved.push({
-        id: attachment.id,
         path: filePath,
         name: attachment.name ?? path.basename(filePath),
-        contentType: attachment.contentType ?? undefined,
+        contentType: attachment.contentType,
         isImage: (attachment.contentType ?? "").startsWith("image/"),
       });
     }
     return saved;
   }
 
-  async fetchReplyContext(message) {
+  async fetchReplyContext(message: Message): Promise<string | undefined> {
     try {
       const replied = await message.fetchReference();
       return `${replied.author?.username ?? "unknown"}: ${(replied.content ?? "").slice(0, 400)}`;
@@ -646,7 +645,7 @@ export class PiDiscordDaemon {
     }
   }
 
-  async scheduleWork() {
+  async scheduleWork(): Promise<void> {
     if (this.stopping) return;
     for (const route of this.routeContexts.values()) {
       if (this.currentRuns.size >= this.config.globalConcurrency) return;
@@ -680,8 +679,8 @@ export class PiDiscordDaemon {
     }
   }
 
-  async processQueueItem(route, leasedItem) {
-    let heartbeat;
+  async processQueueItem(route: RouteContext, leasedItem: QueueItem): Promise<void> {
+    let heartbeat: NodeJS.Timeout | undefined;
     let unsubscribe = () => undefined;
 
     try {
@@ -698,22 +697,22 @@ export class PiDiscordDaemon {
         }, { routeKey: route.manifest.routeKey, itemId: leasedItem.id });
       }, Math.max(1_000, Math.floor(this.config.queueLeaseMs / 3)));
 
-      unsubscribe = session.subscribe((event) => {
-        route.renderer.handleSessionEvent(event);
+      unsubscribe = session.subscribe((event: unknown) => {
+        route.renderer.handleSessionEvent(event as any);
       });
 
       const modelSupportsImages = this.config.enableImageInput && (session.model?.input?.includes?.("image") ?? false);
-      const images = modelSupportsImages
+      const images: unknown[] = modelSupportsImages
         ? await Promise.all(
-            leasedItem.payload.attachments
+            (leasedItem.payload.attachments as QueueAttachment[])
               .filter((attachment) => attachment.isImage && attachment.contentType)
-              .map((attachment) => toImageContent(attachment.path, attachment.contentType)),
+              .map((attachment) => toImageContent(attachment.path, attachment.contentType!)),
           )
         : [];
       await session.prompt(leasedItem.payload.promptText, {
         expandPromptTemplates: false,
         source: "extension",
-        images,
+        images: images as any[],
       });
       route.manifest.sessionFile = session.sessionFile;
       await this.registry.saveManifest(route.manifest);
@@ -724,7 +723,7 @@ export class PiDiscordDaemon {
         timestamp: Date.now(),
         sourceId: leasedItem.id,
         text: route.renderer.currentAssistantText,
-      });
+      } as JournalEntry);
       await route.renderer.renderSuccess();
     } catch (error) {
       const text = String(error);
@@ -737,7 +736,7 @@ export class PiDiscordDaemon {
         timestamp: Date.now(),
         sourceId: leasedItem.id,
         error: text,
-      });
+      } as JournalEntry);
       if (nextState === "cancelled") {
         await route.renderer.renderCancelled("Run stopped.");
       } else {
@@ -747,11 +746,11 @@ export class PiDiscordDaemon {
       route.host.currentSourceId = undefined;
       if (heartbeat) clearInterval(heartbeat);
       unsubscribe();
-      route.renderer.stopTyping(); // Ensure typing always stops
+      route.renderer.stopTyping();
     }
   }
 
-  async abortRoute(routeKey) {
+  async abortRoute(routeKey: string): Promise<boolean> {
     const active = this.currentRuns.get(routeKey);
     if (active) {
       await active.abort();
@@ -760,13 +759,13 @@ export class PiDiscordDaemon {
     return false;
   }
 
-  async reconcileKnownRoutes() {
+  async reconcileKnownRoutes(): Promise<void> {
     for (const summary of this.registry.list()) {
       try {
         const route = await this.ensureRoute({ ...summary.scope, routeKey: summary.routeKey });
         const channel = await this.client.channels.fetch(route.manifest.scope.threadId ?? route.manifest.scope.channelId);
         if (!channel || !("messages" in channel)) continue;
-        const recent = await channel.messages.fetch({ limit: 15 });
+        const recent = await (channel as GuildTextBasedChannel).messages.fetch({ limit: 15 });
         for (const message of [...recent.values()].reverse()) {
           if (message.author?.bot) continue;
           if (!authorizeInteraction(message, this.config).allowed) continue;
@@ -779,7 +778,7 @@ export class PiDiscordDaemon {
             text: message.content ?? "",
             authorId: message.author?.id,
             authorName: message.author?.username,
-          });
+          } as JournalEntry);
         }
       } catch (error) {
         await this.logger.warn("route-reconcile-failed", { routeKey: summary.routeKey, error: String(error) });
@@ -787,7 +786,7 @@ export class PiDiscordDaemon {
     }
   }
 
-  async writeStatus(extra = {}) {
+  async writeStatus(extra: Partial<DaemonStatus> = {}): Promise<void> {
     this.status = {
       ...this.status,
       ...extra,
@@ -798,7 +797,7 @@ export class PiDiscordDaemon {
     await writeJson(this.paths.statusPath, this.status);
   }
 
-  async stop() {
+  async stop(): Promise<void> {
     this.stopping = true;
     if (this.heartbeat) clearInterval(this.heartbeat);
     for (const active of this.currentRuns.values()) {

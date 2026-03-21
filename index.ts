@@ -1,12 +1,12 @@
 import { readFile } from "node:fs/promises";
-import type { ExtensionAPI, Pi } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { createDefaultConfig, loadConfig, normalizeConfig, saveConfig, validateConfig, type PiDiscordConfig } from "./lib/config.js";
 import { syncSlashCommands, type SyncResult } from "./lib/discord-commands.js";
 import { pathExists } from "./lib/fs.js";
 import { getPaths, type Paths } from "./lib/paths.js";
 import { readDaemonLogs, readDaemonStatus, startDaemon, stopDaemon, type StartResult, type StopResult } from "./lib/supervisor.js";
 
-function sendText(pi: Pi, text: string): void {
+function sendText(pi: ExtensionAPI, text: string): void {
   pi.sendMessage({ customType: "pi-discord", content: text, display: true });
 }
 
@@ -77,7 +77,7 @@ export interface CommandContext {
   };
 }
 
-export default function (pi: Pi) {
+export default function (pi: ExtensionAPI) {
   pi.registerCommand("discord", {
     description: "Manage the pi Discord bridge: /discord setup|start|stop|status|logs|sync-commands|open-config",
     handler: async (input: string, ctx: CommandContext) => {

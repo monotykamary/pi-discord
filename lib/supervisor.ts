@@ -33,7 +33,13 @@ function isProcessAlive(pid: number): boolean {
 export interface DaemonStatus {
   running: boolean;
   pid?: number;
-  status?: unknown;
+  status?: {
+    pid?: number;
+    phase?: string;
+    userTag?: string;
+    routeCount?: number;
+    activeRuns?: string[];
+  };
 }
 
 export async function readDaemonStatus(paths: Paths): Promise<DaemonStatus> {

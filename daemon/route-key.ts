@@ -4,11 +4,13 @@ export interface RouteKeyInput {
   threadId?: string | null;
 }
 
-export interface ScopeInput {
+export interface ScopeInfo {
   guildId: string | null;
   channelId: string;
   threadId: string | null;
 }
+
+export type ScopeInput = ScopeInfo;
 
 export function makeRouteKey(input: RouteKeyInput): string {
   const guildPart = input.guildId ?? "dm";
@@ -16,7 +18,7 @@ export function makeRouteKey(input: RouteKeyInput): string {
   return `${guildPart}__${input.channelId}__${threadPart}`;
 }
 
-export function formatRoute(scope: ScopeInput): string {
+export function formatRoute(scope: ScopeInfo): string {
   if (scope.guildId === null || scope.guildId === undefined) {
     return "DM";
   }
