@@ -24,6 +24,46 @@ function stripBotMention(content, botId) {
     .trim();
 }
 
+/**
+ * Check if content contains a trigger word as a standalone word.
+ * @param {string | undefined} content
+ * @param {string[]} triggerWords
+ * @returns {string | undefined} The matched trigger word, or undefined if no match
+ */
+function findTriggerWord(content, triggerWords) {
+  if (!content || triggerWords.length === 0) return undefined;
+  const lowerContent = content.toLowerCase();
+  for (const word of triggerWords) {
+    const lowerWord = word.toLowerCase();
+    // Check as standalone word using word boundaries
+    const regex = new RegExp(`\\b${escapeRegExp(lowerWord)}\\b`, "i");
+    if (regex.test(lowerContent)) {
+      return word;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Remove the trigger word from the beginning of content if present.
+ * @param {string} content
+ * @param {string} triggerWord
+ * @returns {string}
+ */
+function stripTriggerWord(content, triggerWord) {
+  const regex = new RegExp(`^\\s*\\b${escapeRegExp(triggerWord)}\\b[\\s:,;-]*`, "i");
+  return content.replace(regex, "").trim();
+}
+
+/**
+ * Escape special regex characters.
+ * @param {string} string
+ * @returns {string}
+ */
+function escapeRegExp(string) {
+  return string.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 async function toImageContent(filePath, mediaType) {
   const data = await readFile(filePath);
   return {
@@ -215,6 +255,22 @@ export class PiDiscordDaemon {
     );
   }
 
+  /**
+   * Check if message content contains a configured trigger word.
+   * Respects triggerWarmOnly setting - returns undefined if warm-only and no existing route.
+   * @param {string | undefined} content
+   * @returns {string | undefined}
+   */
+  checkTriggerWord(content) {
+    if (!this.config.triggerWarmOnly) {
+      // Cold start allowed - always check for triggers
+      return findTriggerWord(content, this.config.triggerWords);
+    }
+    // Warm-only mode: triggers require existing route (checked by caller via getExistingRoute)
+    // Just do the text match here, route existence is verified separately
+    return findTriggerWord(content, this.config.triggerWords);
+  }
+
   async getExistingRoute(scope) {
     if (this.routeContexts.has(scope.routeKey)) {
       return this.routeContexts.get(scope.routeKey);
@@ -322,7 +378,9 @@ export class PiDiscordDaemon {
 
     const botMentioned = message.mentions.users.has(this.client.user.id);
     const isDm = !message.guildId;
-    if (!botMentioned && !isDm) {
+    const triggerMatch = this.checkTriggerWord(message.content);
+
+    if (!botMentioned && !isDm && !triggerMatch) {
       const scope = this.resolveScopeFromChannel(message.guildId ?? null, message.channelId, message.channel);
       const route = await this.getExistingRoute(scope);
       if (!route) return;
@@ -338,18 +396,34 @@ export class PiDiscordDaemon {
       return;
     }
 
+    // Determine if this is a warm-route trigger (not mention/DM)
+    const isWarmTrigger = !botMentioned && !isDm && triggerMatch;
+
     const scope = this.resolveScopeFromChannel(message.guildId ?? null, message.channelId, message.channel);
-    const route = await this.ensureRoute(scope);
+    // For warm triggers, only use existing routes (don't create new ones)
+    const route = isWarmTrigger
+      ? await this.getExistingRoute(scope)
+      : await this.ensureRoute(scope);
+
+    if (!route) return; // Warm trigger with no existing route - drop silently
     if (route.journal.hasSource(message.id) || route.queue.hasSource(message.id)) return;
 
     const savedAttachments = await this.saveInboundAttachments(route, message.attachments.values(), message.id);
     const replyContext = message.reference?.messageId ? await this.fetchReplyContext(message) : undefined;
-    const rawText = botMentioned ? stripBotMention(message.content ?? "", this.client.user.id) : (message.content ?? "");
+    let rawText;
+    if (botMentioned) {
+      rawText = stripBotMention(message.content ?? "", this.client.user.id);
+    } else if (triggerMatch) {
+      rawText = stripTriggerWord(message.content ?? "", triggerMatch);
+    } else {
+      rawText = message.content ?? "";
+    }
+    const triggerLabel = isDm ? "dm" : (triggerMatch ? "trigger" : "mention");
     const promptText = buildPromptText({
       routeKey: route.manifest.routeKey,
       scope: route.manifest.scope,
       requester: { id: message.author.id, name: message.author.username },
-      trigger: isDm ? "dm" : "mention",
+      trigger: triggerLabel,
       rawText,
       replyContext,
       savedAttachments,

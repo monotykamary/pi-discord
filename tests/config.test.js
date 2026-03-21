@@ -12,6 +12,8 @@ test("default config uses dedicated workspace mode and sane concurrency", () => 
   assert.equal(config.globalConcurrency, 2);
   assert.equal(config.primaryFlushMs, 1200);
   assert.equal(config.commandName, "pi");
+  assert.deepEqual(config.triggerWords, ["pi"]);
+  assert.equal(config.triggerWarmOnly, true);
 });
 
 test("validation flags missing credentials and invalid shared mode", () => {
@@ -96,6 +98,23 @@ test("saveConfig persists normalized config", async () => {
   assert.deepEqual(config.routeOverrides, {
     routeA: { executionRoot: "/tmp/project", mode: "shared" },
   });
+});
+
+test("normalizeConfig handles trigger words and warm-only setting", () => {
+  const paths = getPaths({ agentDir: "/tmp/agent", workspaceDir: "/tmp/agent/pi-discord" });
+  
+  // Uses defaults when not provided
+  const defaultConfig = normalizeConfig(paths, {});
+  assert.deepEqual(defaultConfig.triggerWords, ["pi"]);
+  assert.equal(defaultConfig.triggerWarmOnly, true);
+
+  // Normalizes provided values
+  const config = normalizeConfig(paths, {
+    triggerWords: [" pi ", "  bot  ", ""],
+    triggerWarmOnly: false,
+  });
+  assert.deepEqual(config.triggerWords, ["pi", "bot"]);
+  assert.equal(config.triggerWarmOnly, false);
 });
 
 test("validation rejects fractional runtime timing and concurrency values", () => {
