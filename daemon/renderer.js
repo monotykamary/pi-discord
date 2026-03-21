@@ -42,6 +42,34 @@ export class DiscordRenderer {
     this.lastSentContent = undefined;
     this.pendingTools = 0;
     this.toolIndicatorMessageId = undefined;
+    this.creatingIndicator = false;
+    // Tool operation queue to prevent races
+    this.toolQueue = [];
+    this.processingToolQueue = false;
+  }
+
+  enqueueToolOperation(operation) {
+    this.toolQueue.push(operation);
+    void this.processToolQueue();
+  }
+
+  async processToolQueue() {
+    if (this.processingToolQueue) return;
+    this.processingToolQueue = true;
+    
+    while (this.toolQueue.length > 0) {
+      const operation = this.toolQueue.shift();
+      try {
+        await operation();
+      } catch (error) {
+        await this.logger.warn("tool-queue-operation-failed", { 
+          routeKey: this.manifest.routeKey, 
+          error: String(error) 
+        });
+      }
+    }
+    
+    this.processingToolQueue = false;
   }
 
   runInBackground(label, task) {
@@ -214,29 +242,25 @@ export class DiscordRenderer {
       this.sendIncrementalResponse();
     }
     if (event.type === "tool_execution_start") {
-      this.runInBackground("tool-post-failed", async () => {
-        // Increment pending tools count
+      // Queue tool start operation to prevent races
+      this.enqueueToolOperation(async () => {
         this.pendingTools++;
-        // Show indicator when tools are active
         await this.showToolIndicator();
-        // Don't post "starting" - only post results when done
       });
     }
     if (event.type === "tool_execution_end") {
-      this.runInBackground("tool-post-failed", async () => {
-        // Simple format: 🛠️ toolname (no checkmark, no "done")
+      // Queue tool end operation - runs after all queued operations
+      this.enqueueToolOperation(async () => {
         const toolDisplay = `🛠️ **${event.toolName}**`;
         
         // Handle large JSON results as file uploads
         if (event.result) {
           const resultJson = JSON.stringify(event.result, null, 2);
           if (resultJson.length > 1000) {
-            // Upload as file attachment
             await this.uploadJsonToThread(`${event.toolName}-result.json`, resultJson, {
               title: toolDisplay
             });
           } else {
-            // Wrap in codeblock for small results
             const resultDisplay = `\n\`\`\`json\n${resultJson}\n\`\`\``;
             await this.postToolDetail(`${toolDisplay}${resultDisplay}`);
           }
@@ -244,7 +268,6 @@ export class DiscordRenderer {
           await this.postToolDetail(toolDisplay);
         }
         
-        // Decrement and remove indicator when all tools done
         this.pendingTools = Math.max(0, this.pendingTools - 1);
         if (this.pendingTools === 0) {
           await this.hideToolIndicator();
