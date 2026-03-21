@@ -754,6 +754,7 @@ export class PiDiscordDaemon {
       route.host.currentSourceId = undefined;
       if (heartbeat) clearInterval(heartbeat);
       unsubscribe();
+      route.renderer.stopTyping(); // Ensure typing always stops
     }
   }
 
