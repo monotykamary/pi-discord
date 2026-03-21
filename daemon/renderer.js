@@ -303,56 +303,26 @@ export class DiscordRenderer {
   }
 
   async postToolDetail(content) {
-    // If no message exists yet, create a placeholder for the thread
-    // Double-checked locking pattern to prevent race conditions
-    if (!this.lastMessageId && !this.creatingPlaceholder) {
-      this.creatingPlaceholder = true;
-      try {
-        // Check again inside the lock - another call may have created it
-        if (this.lastMessageId) {
-          this.creatingPlaceholder = false;
-          // Fall through to normal thread posting
-        } else {
-          const channel = await this.getTargetChannel();
-          const placeholder = await channel.send({ 
-            content: "🛠️ Using tools...", 
-            allowedMentions: { parse: [] } 
-          });
-          this.lastMessageId = placeholder.id;
-          await this.logger.info("placeholder-created", { 
-            routeKey: this.manifest.routeKey, 
-            messageId: placeholder.id 
-          });
-        }
-      } catch (err) {
-        await this.logger.warn("placeholder-create-failed", { 
-          routeKey: this.manifest.routeKey, 
-          error: String(err) 
-        });
-        return; // Can't create placeholder, skip tool detail
-      } finally {
-        this.creatingPlaceholder = false;
-      }
-    } else if (!this.lastMessageId) {
-      // Another call is creating the placeholder, wait a bit then check again
-      await new Promise(r => setTimeout(r, 100));
-      if (!this.lastMessageId) {
-        await this.logger.info("placeholder-still-creating", { 
-          routeKey: this.manifest.routeKey 
-        });
-        return;
-      }
+    // Use tool indicator message as thread anchor if available
+    const threadAnchorId = this.toolIndicatorMessageId || this.lastMessageId;
+    
+    if (!threadAnchorId) {
+      await this.logger.info("tool-thread-no-anchor", { 
+        routeKey: this.manifest.routeKey,
+        hasIndicator: !!this.toolIndicatorMessageId,
+        hasLastMessage: !!this.lastMessageId
+      });
+      return; // Can't create thread without an anchor message
     }
     
-    // Create thread off last message if not exists, then post to it
-    let thread = undefined;
-    if (!this.manifest.detailsThreadId && this.enableDetailsThreads && this.lastMessageId) {
+    // Create thread off anchor message if not exists
+    if (!this.manifest.detailsThreadId && this.enableDetailsThreads) {
       try {
         const channel = await this.getTargetChannel();
         if ("messages" in channel) {
-          const message = await channel.messages.fetch(this.lastMessageId);
+          const message = await channel.messages.fetch(threadAnchorId);
           if (typeof message.startThread === "function") {
-            thread = await message.startThread({
+            const thread = await message.startThread({
               name: "Tool calls",
               autoArchiveDuration: 60,
             });
@@ -360,32 +330,51 @@ export class DiscordRenderer {
             await this.persistManifest();
             await this.logger.info("tool-thread-created", { 
               routeKey: this.manifest.routeKey, 
-              threadId: thread.id 
+              threadId: thread.id,
+              anchoredTo: threadAnchorId,
+              isIndicator: threadAnchorId === this.toolIndicatorMessageId
             });
+            
+            // Post directly to the newly created thread
+            try {
+              await thread.send({ 
+                content: content.slice(0, DISCORD_MESSAGE_LIMIT), 
+                allowedMentions: { parse: [] } 
+              });
+              await this.logger.info("tool-detail-posted", { 
+                routeKey: this.manifest.routeKey, 
+                content: content.slice(0, 50),
+                threadId: thread.id
+              });
+              return; // Done - posted to new thread
+            } catch (err) {
+              await this.logger.warn("tool-detail-post-failed", { 
+                routeKey: this.manifest.routeKey,
+                content: content.slice(0, 50),
+                error: String(err) 
+              });
+              return;
+            }
           }
         }
       } catch (err) {
         await this.logger.warn("tool-thread-create-failed", { 
           routeKey: this.manifest.routeKey, 
-          lastMessageId: this.lastMessageId,
+          threadAnchorId,
           error: String(err) 
         });
       }
     }
     
-    // If we didn't just create a thread, try to get existing one
-    if (!thread) {
-      thread = await this.ensureDetailsThread();
-    }
-    
-    // Post to thread or silently skip if no thread
+    // If we already have a thread, use existing logic
+    const thread = await this.ensureDetailsThread();
     if (thread && "send" in thread) {
       try {
         await thread.send({ 
           content: content.slice(0, DISCORD_MESSAGE_LIMIT), 
           allowedMentions: { parse: [] } 
         });
-        await this.logger.info("tool-detail-posted", { 
+        await this.logger.info("tool-detail-posted-existing", { 
           routeKey: this.manifest.routeKey, 
           content: content.slice(0, 50) 
         });
@@ -396,13 +385,6 @@ export class DiscordRenderer {
           error: String(err) 
         });
       }
-    } else {
-      await this.logger.info("tool-thread-not-available", { 
-        routeKey: this.manifest.routeKey,
-        hasThreadId: !!this.manifest.detailsThreadId,
-        hasLastMessageId: !!this.lastMessageId,
-        enableDetailsThreads: this.enableDetailsThreads
-      });
     }
   }
 
