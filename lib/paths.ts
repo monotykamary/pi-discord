@@ -55,7 +55,7 @@ export function getPaths(options: PathsOptions = {}): Paths {
     pidPath: path.join(workspaceDir, "run", "daemon.pid"),
     lockPath: path.join(workspaceDir, "run", "daemon.lock"),
     registryPath: path.join(workspaceDir, "routes", "registry.json"),
-    daemonEntry: path.join(packageRoot, "bin", "pi-discord-daemon.mjs"),
+    daemonEntry: path.join(packageRoot, "bin", "pi-discord-daemon.ts"),
   };
 }
 

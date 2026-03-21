@@ -76,7 +76,8 @@ export async function startDaemon(paths: Paths): Promise<StartResult> {
   }
 
   await ensureDir(paths.runDir);
-  const child = spawn(process.execPath, [paths.daemonEntry, "--workspace", paths.workspaceDir], {
+  // Use tsx to run TypeScript daemon
+  const child = spawn("npx", ["tsx", paths.daemonEntry, "--workspace", paths.workspaceDir], {
     cwd: paths.packageRoot,
     detached: true,
     stdio: "ignore",
