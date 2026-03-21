@@ -1,5 +1,5 @@
 import { basename } from "node:path";
-import { AttachmentBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType } from "discord.js";
+import { AttachmentBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, EmbedBuilder } from "discord.js";
 import { DISCORD_MESSAGE_LIMIT } from "../lib/constants.js";
 
 export function splitDiscordText(text) {
@@ -66,7 +66,7 @@ export class DiscordRenderer {
     ];
   }
 
-  async ensurePrimaryMessage(fallbackText = "Working...") {
+  async ensurePrimaryMessage(fallbackText = "Working...", fallbackEmbed = null) {
     const channel = await this.getTargetChannel();
     if (this.manifest.primaryMessageId && "messages" in channel) {
       try {
@@ -77,11 +77,11 @@ export class DiscordRenderer {
       }
     }
 
-    const message = await channel.send({
-      content: fallbackText,
-      components: this.createStopRow(),
-      allowedMentions: { parse: [] },
-    });
+    const payload = fallbackEmbed
+      ? { embeds: [fallbackEmbed], components: this.createStopRow(), allowedMentions: { parse: [] } }
+      : { content: fallbackText, components: this.createStopRow(), allowedMentions: { parse: [] } };
+
+    const message = await channel.send(payload);
     this.manifest.primaryMessageId = message.id;
     await this.persistManifest();
     return message;
@@ -109,12 +109,32 @@ export class DiscordRenderer {
     }
   }
 
+  /**
+   * Updates the primary message with an embed instead of plain text.
+   * @param {EmbedBuilder} embed
+   * @param {{ keepStop?: boolean }} options
+   */
+  async updatePrimaryEmbed(embed, { keepStop = true } = {}) {
+    const message = await this.ensurePrimaryMessage("Working...", embed);
+    await message.edit({
+      embeds: [embed],
+      components: keepStop ? this.createStopRow() : [],
+      allowedMentions: { parse: [] },
+    });
+    await this.persistManifest();
+  }
+
   schedulePrimaryFlush() {
     if (this.flushTimer) return;
     this.flushTimer = setTimeout(() => {
       this.flushTimer = undefined;
       this.runInBackground("primary-update-failed", async () => {
-        await this.updatePrimary(this.currentAssistantText || "Working...");
+        const embed = new EmbedBuilder()
+          .setTitle("🔵 Working")
+          .setDescription(this.currentAssistantText.slice(0, 4000) || "Working...")
+          .setColor(0x3498DB)
+          .setTimestamp();
+        await this.updatePrimaryEmbed(embed);
       });
     }, this.flushMs);
   }
@@ -219,11 +239,21 @@ export class DiscordRenderer {
   }
 
   async renderQueued(item) {
-    await this.updatePrimary(`Queued for <@${item.source.userId}>\n\n${item.payload.rawText || "(empty message)"}`);
+    const embed = new EmbedBuilder()
+      .setTitle("🔄 Queued")
+      .setDescription(`<@${item.source.userId}> asked:\n\n${item.payload.rawText || "(empty message)"}`)
+      .setColor(0xFFD700) // Yellow
+      .setTimestamp();
+    await this.updatePrimaryEmbed(embed);
   }
 
   async renderRunning(item) {
-    await this.updatePrimary(`Working for <@${item.source.userId}>\n\n${item.payload.rawText || "(empty message)"}`);
+    const embed = new EmbedBuilder()
+      .setTitle("🔵 Working")
+      .setDescription(`<@${item.source.userId}> asked:\n\n${item.payload.rawText || "(empty message)"}`)
+      .setColor(0x3498DB) // Blue
+      .setTimestamp();
+    await this.updatePrimaryEmbed(embed);
   }
 
   async renderSuccess() {
@@ -231,7 +261,13 @@ export class DiscordRenderer {
       clearTimeout(this.flushTimer);
       this.flushTimer = undefined;
     }
-    await this.updatePrimary(this.currentAssistantText || "Done.", { keepStop: false });
+    const content = this.currentAssistantText || "Done.";
+    const embed = new EmbedBuilder()
+      .setTitle("✅ Complete")
+      .setDescription(content.slice(0, 4000))
+      .setColor(0x2ECC71) // Green
+      .setTimestamp();
+    await this.updatePrimaryEmbed(embed, { keepStop: false });
   }
 
   async renderCancelled(reason = "Run stopped.") {
@@ -239,7 +275,12 @@ export class DiscordRenderer {
       clearTimeout(this.flushTimer);
       this.flushTimer = undefined;
     }
-    await this.updatePrimary(reason, { keepStop: false });
+    const embed = new EmbedBuilder()
+      .setTitle("⏹️ Cancelled")
+      .setDescription(reason)
+      .setColor(0xE74C3C) // Red
+      .setTimestamp();
+    await this.updatePrimaryEmbed(embed, { keepStop: false });
     await this.postDetail(reason, { fallbackToChannel: false });
   }
 
@@ -248,8 +289,13 @@ export class DiscordRenderer {
       clearTimeout(this.flushTimer);
       this.flushTimer = undefined;
     }
-    const message = `Run failed.\n\n${String(error).slice(0, 1200)}`;
-    await this.updatePrimary(message, { keepStop: false });
-    await this.postDetail(message, { fallbackToChannel: false });
+    const errorText = String(error).slice(0, 4000);
+    const embed = new EmbedBuilder()
+      .setTitle("❌ Failed")
+      .setDescription(errorText)
+      .setColor(0xE74C3C) // Red
+      .setTimestamp();
+    await this.updatePrimaryEmbed(embed, { keepStop: false });
+    await this.postDetail(`Run failed.\n\n${errorText}`, { fallbackToChannel: false });
   }
 }
