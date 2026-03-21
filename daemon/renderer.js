@@ -36,6 +36,7 @@ export class DiscordRenderer {
     this.enableDetailsThreads = options.enableDetailsThreads;
     this.currentAssistantText = "";
     this.flushTimer = undefined;
+    this.typingInterval = undefined;
   }
 
   runInBackground(label, task) {
@@ -220,10 +221,39 @@ export class DiscordRenderer {
 
   async renderQueued(item) {
     await this.updatePrimary("*Thinking...*", { keepStop: true });
+    this.startTyping();
   }
 
   async renderRunning(item) {
     await this.updatePrimary("*Thinking...*", { keepStop: true });
+    this.startTyping();
+  }
+
+  startTyping() {
+    // Send initial typing indicator
+    this.sendTyping();
+    // Keep sending every 8 seconds while processing (Discord typing expires after ~10s)
+    this.typingInterval = setInterval(() => {
+      this.sendTyping();
+    }, 8000);
+  }
+
+  async sendTyping() {
+    try {
+      const channel = await this.getTargetChannel();
+      if (channel && "sendTyping" in channel) {
+        await channel.sendTyping();
+      }
+    } catch {
+      // Ignore typing errors - not critical
+    }
+  }
+
+  stopTyping() {
+    if (this.typingInterval) {
+      clearInterval(this.typingInterval);
+      this.typingInterval = undefined;
+    }
   }
 
   async renderSuccess() {
@@ -231,6 +261,7 @@ export class DiscordRenderer {
       clearTimeout(this.flushTimer);
       this.flushTimer = undefined;
     }
+    this.stopTyping();
     await this.updatePrimary(this.currentAssistantText || "Done.", { keepStop: false });
   }
 
@@ -239,6 +270,7 @@ export class DiscordRenderer {
       clearTimeout(this.flushTimer);
       this.flushTimer = undefined;
     }
+    this.stopTyping();
     await this.updatePrimary(`*${reason}*`, { keepStop: false });
   }
 
@@ -247,6 +279,7 @@ export class DiscordRenderer {
       clearTimeout(this.flushTimer);
       this.flushTimer = undefined;
     }
+    this.stopTyping();
     await this.updatePrimary(`**Error:** ${String(error).slice(0, 1800)}`, { keepStop: false });
   }
 }
