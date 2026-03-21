@@ -61,10 +61,11 @@ export class DiscordRenderer {
   }
 
   async ensureDetailsThread() {
-    // Details thread requires a primary message - returns undefined if not set
-    if (!this.enableDetailsThreads || !this.manifest.primaryMessageId) {
+    // Details thread requires a message to thread from - use lastMessageId for incremental mode
+    if (!this.enableDetailsThreads) {
       return undefined;
     }
+    // Prefer detailsThreadId if already cached
     if (this.manifest.detailsThreadId) {
       try {
         const channel = await this.client.channels.fetch(this.manifest.detailsThreadId);
