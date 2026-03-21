@@ -100,7 +100,7 @@ export class DiscordRenderer {
     });
     await this.persistManifest();
 
-    if (!keepStop && chunks.length > 1) {
+    if (chunks.length > 1) {
       const channel = await this.getTargetChannel();
       for (const chunk of chunks.slice(1)) {
         await channel.send({ content: chunk, allowedMentions: { parse: [] } });
@@ -218,12 +218,12 @@ export class DiscordRenderer {
   }
 
   async renderQueued(item) {
-    await this.updatePrimary("*Thinking...*", { keepStop: true });
+    await this.updatePrimary("*Thinking...*");
     this.startTyping();
   }
 
   async renderRunning(item) {
-    await this.updatePrimary("*Thinking...*", { keepStop: true });
+    await this.updatePrimary("*Thinking...*");
     this.startTyping();
   }
 
