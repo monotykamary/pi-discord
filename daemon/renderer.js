@@ -344,14 +344,15 @@ export class DiscordRenderer {
       }
     }
     
-    // Create thread off last message if not exists
+    // Create thread off last message if not exists, then post to it
+    let thread = undefined;
     if (!this.manifest.detailsThreadId && this.enableDetailsThreads && this.lastMessageId) {
       try {
         const channel = await this.getTargetChannel();
         if ("messages" in channel) {
           const message = await channel.messages.fetch(this.lastMessageId);
           if (typeof message.startThread === "function") {
-            const thread = await message.startThread({
+            thread = await message.startThread({
               name: "Tool calls",
               autoArchiveDuration: 60,
             });
@@ -372,8 +373,12 @@ export class DiscordRenderer {
       }
     }
     
+    // If we didn't just create a thread, try to get existing one
+    if (!thread) {
+      thread = await this.ensureDetailsThread();
+    }
+    
     // Post to thread or silently skip if no thread
-    const thread = await this.ensureDetailsThread();
     if (thread && "send" in thread) {
       try {
         await thread.send({ 
