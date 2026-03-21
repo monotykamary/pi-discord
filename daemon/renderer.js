@@ -393,8 +393,8 @@ export class DiscordRenderer {
         if (event.toolName) {
           const key = `${event.toolName}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
           this.currentToolKey = key; // Store for retrieval
-          if (event.parameters) {
-            this.toolParams.set(key, { name: event.toolName, params: event.parameters });
+          if (event.args) {
+            this.toolParams.set(key, { name: event.toolName, params: event.args });
           }
         }
         // Only show indicator for the first tool
@@ -475,8 +475,8 @@ export class DiscordRenderer {
     const result = event.result;
     if (!result) return { content: null, filename: null, isDiff: false };
     
-    // Use stored params if available (from tool_execution_start)
-    const params = storedParams || event.parameters || {};
+    // Use stored params if available (from tool_execution_start), otherwise fallback to event.args
+    const params = storedParams || event.args || {};
     
     // DEBUG: Log what we got
     this.logger.info("extract-tool-debug", {
