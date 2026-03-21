@@ -99,6 +99,29 @@ export class DiscordRenderer {
     await this.logger.warn(reason, { routeKey: this.manifest.routeKey, error: String(error) });
   }
 
+  async uploadJsonToThread(filename, jsonContent, options = {}) {
+    const thread = await this.ensureDetailsThread();
+    const payload = {
+      content: options.title ?? `\`\`\`json\n${filename}\n\`\`\``, 
+      files: [new AttachmentBuilder(Buffer.from(jsonContent), { name: filename })],
+      allowedMentions: { parse: [] },
+    };
+    
+    if (thread && "send" in thread) {
+      try {
+        const message = await thread.send(payload);
+        return { messageId: message.id, url: message.attachments.first()?.url };
+      } catch (error) {
+        await this.clearDetailsThread("details-thread-json-upload-failed", error);
+      }
+    }
+    
+    // Fallback to channel
+    const channel = await this.getTargetChannel();
+    const message = await channel.send(payload);
+    return { messageId: message.id, url: message.attachments.first()?.url };
+  }
+
   async postDetail(content, { fallbackToChannel = true } = {}) {
     const payload = { content: content.slice(0, DISCORD_MESSAGE_LIMIT), allowedMentions: { parse: [] } };
     const thread = await this.ensureDetailsThread();
@@ -169,21 +192,26 @@ export class DiscordRenderer {
     }
     if (event.type === "tool_execution_end") {
       this.runInBackground("tool-post-failed", async () => {
-        // Format result - wrap JSON in markdown file attachment or codeblock
+        const status = event.isError ? " ❌ failed" : " ✅ done";
         let resultDisplay = "";
+        
+        // Handle large JSON results as file uploads
         if (event.result) {
           const resultJson = JSON.stringify(event.result, null, 2);
-          // If result is large, use file attachment (Discord allows up to 8MB)
           if (resultJson.length > 1000) {
-            // Will handle as file upload
-            resultDisplay = "📄 (see attached result.json)";
+            // Upload as file attachment
+            await this.uploadJsonToThread(`${event.toolName}-result.json`, resultJson, {
+              title: `**${event.toolName}**${status}`
+            });
           } else {
-            // Wrap in collapsible details or codeblock
-            resultDisplay = `\n\`\`\`json\n${resultJson.slice(0, 1800)}\n\`\`\``;
+            // Wrap in codeblock for small results
+            resultDisplay = `\n\`\`\`json\n${resultJson}\n\`\`\``;
+            await this.postToolDetail(`**${event.toolName}**${status}${resultDisplay}`);
           }
+        } else {
+          await this.postToolDetail(`**${event.toolName}**${status}`);
         }
-        const status = event.isError ? " ❌ failed" : " ✅ done";
-        await this.postToolDetail(`**${event.toolName}**${status}${resultDisplay}`);
+        
         // Decrement and remove indicator when all tools done
         this.pendingTools = Math.max(0, this.pendingTools - 1);
         if (this.pendingTools === 0) {
