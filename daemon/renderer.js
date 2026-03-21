@@ -132,9 +132,15 @@ export class DiscordRenderer {
   }
 
   handleSessionEvent(event) {
+    // Log all events for debugging
+    this.logger.info("session-event", { 
+      routeKey: this.manifest.routeKey,
+      eventType: event.type,
+      hasToolName: !!event.toolName
+    });
+    
     if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
       this.currentAssistantText += event.assistantMessageEvent.delta;
-      // Send incremental messages as text arrives (natural conversation)
       this.sendIncrementalResponse();
     }
     if (event.type === "tool_execution_start") {
