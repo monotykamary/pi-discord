@@ -435,9 +435,13 @@ export class DiscordRenderer {
     if (event.toolName === 'str_replace' || event.toolName === 'edit' || event.toolName === 'apply_diff') {
       const filePath = params.filePath || params.path || result.filePath || result.path;
       
-      if (params.old_string && params.new_string) {
+      // Try different parameter name conventions
+      const oldStr = params.old_string || params.search || params.oldString || params.old;
+      const newStr = params.new_string || params.replace || params.newString || params.new;
+      
+      if (oldStr && newStr) {
         // Create a simple unified diff format
-        const diff = `--- ${filePath || 'original'}\n+++ ${filePath || 'modified'}\n@@ -1,1 +1,1 @@\n-${params.old_string}\n+${params.new_string}`;
+        const diff = `--- ${filePath || 'original'}\n+++ ${filePath || 'modified'}\n@@ -1,1 +1,1 @@\n-${oldStr}\n+${newStr}`;
         return { 
           content: diff, 
           filename: filePath,
