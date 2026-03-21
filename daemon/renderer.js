@@ -100,7 +100,38 @@ export class DiscordRenderer {
   }
 
   async uploadJsonToThread(filename, jsonContent, options = {}) {
-    const thread = await this.ensureDetailsThread();
+    // Ensure thread exists first (create if needed)
+    let thread = await this.ensureDetailsThread();
+    if (!thread && this.enableDetailsThreads) {
+      // Need to create thread - use same logic as postToolDetail
+      let threadAnchorId = this.toolIndicatorMessageId || this.lastMessageId;
+      if (!threadAnchorId) {
+        await this.showToolIndicator();
+        threadAnchorId = this.toolIndicatorMessageId;
+      }
+      if (threadAnchorId) {
+        try {
+          const channel = await this.getTargetChannel();
+          if ("messages" in channel) {
+            const message = await channel.messages.fetch(threadAnchorId);
+            if (typeof message.startThread === "function") {
+              thread = await message.startThread({
+                name: "Tool calls",
+                autoArchiveDuration: 60,
+              });
+              this.manifest.detailsThreadId = thread.id;
+              await this.logger.info("tool-thread-created-for-upload", { 
+                routeKey: this.manifest.routeKey, 
+                threadId: thread.id 
+              });
+            }
+          }
+        } catch (err) {
+          await this.logger.warn("tool-thread-create-for-upload-failed", { error: String(err) });
+        }
+      }
+    }
+    
     const payload = {
       content: options.title ?? `\`\`\`json\n${filename}\n\`\`\``, 
       files: [new AttachmentBuilder(Buffer.from(jsonContent), { name: filename })],
