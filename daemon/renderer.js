@@ -332,6 +332,8 @@ export class DiscordRenderer {
     if (event.type === "tool_execution_start") {
       // Queue tool start operation to prevent races
       this.enqueueToolOperation(async () => {
+        // Only show indicator if this is the first tool (pendingTools was 0)
+        const isFirstTool = this.pendingTools === 0;
         this.pendingTools++;
         // Store parameters with unique key for each tool execution
         if (event.toolName) {
@@ -341,7 +343,10 @@ export class DiscordRenderer {
             this.toolParams.set(key, { name: event.toolName, params: event.parameters });
           }
         }
-        await this.showToolIndicator();
+        // Only show indicator for the first tool
+        if (isFirstTool) {
+          await this.showToolIndicator();
+        }
       });
     }
     if (event.type === "tool_execution_end") {
