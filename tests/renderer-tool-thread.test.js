@@ -115,13 +115,14 @@ test("showToolIndicator creates standalone message and sets lastMessageId", asyn
   const manifest = createMockManifest();
   const renderer = createRenderer(mockClient, manifest);
   
+  // Simulate tool start (increments pendingTools)
+  renderer.pendingTools = 1;
   await renderer.showToolIndicator();
   
   assert.equal(sentMessages.length, 1, "Should send one message");
   assert.ok(sentMessages[0].content.includes("Using tools"), "Should contain indicator text");
   assert.equal(renderer.toolIndicatorMessageId, sentMessages[0].messageId, "Should track indicator ID");
   assert.equal(renderer.lastMessageId, sentMessages[0].messageId, "Should use indicator as lastMessageId");
-  assert.equal(renderer.pendingTools, 1, "Should increment pendingTools");
 });
 
 test("showToolIndicator does not create duplicate when already showing", async () => {
@@ -129,7 +130,10 @@ test("showToolIndicator does not create duplicate when already showing", async (
   const manifest = createMockManifest();
   const renderer = createRenderer(mockClient, manifest);
   
-  // First call
+  // Simulate two tools starting
+  renderer.pendingTools = 2;
+  
+  // First call creates indicator
   await renderer.showToolIndicator();
   const firstId = renderer.toolIndicatorMessageId;
   
@@ -138,7 +142,7 @@ test("showToolIndicator does not create duplicate when already showing", async (
   
   assert.equal(sentMessages.length, 1, "Should only send one indicator");
   assert.equal(renderer.toolIndicatorMessageId, firstId, "Should keep same indicator ID");
-  assert.equal(renderer.pendingTools, 2, "Should increment pendingTools for each call");
+  assert.equal(renderer.pendingTools, 2, "Should track both pending tools");
 });
 
 test("hideToolIndicator edits message to show completion", async () => {
@@ -216,8 +220,8 @@ test("tool execution flow: indicator -> thread -> completion", async () => {
   const manifest = createMockManifest();
   const renderer = createRenderer(mockClient, manifest);
   
-  // Simulate tool execution start event
-  renderer.pendingTools = 0;
+  // Simulate tool execution start event (increments pendingTools before calling showToolIndicator)
+  renderer.pendingTools = 1;
   await renderer.showToolIndicator();
   await renderer.postToolDetail("read tool starting...");
   

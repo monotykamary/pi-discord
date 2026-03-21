@@ -215,6 +215,8 @@ export class DiscordRenderer {
     }
     if (event.type === "tool_execution_start") {
       this.runInBackground("tool-post-failed", async () => {
+        // Increment pending tools count
+        this.pendingTools++;
         // Show indicator when tools are active
         await this.showToolIndicator();
         // Don't post "starting" - only post results when done
@@ -455,8 +457,11 @@ export class DiscordRenderer {
   }
 
   async showToolIndicator() {
-    this.pendingTools++;
+    // Guard against concurrent creation
+    if (this.creatingIndicator) return;
     if (this.toolIndicatorMessageId) return; // Already showing
+    
+    this.creatingIndicator = true;
     
     try {
       const channel = await this.getTargetChannel();
@@ -475,6 +480,8 @@ export class DiscordRenderer {
         routeKey: this.manifest.routeKey,
         error: String(err) 
       });
+    } finally {
+      this.creatingIndicator = false;
     }
   }
 
@@ -491,12 +498,14 @@ export class DiscordRenderer {
         }
       }
       this.toolIndicatorMessageId = undefined;
+      this.creatingIndicator = false;
       await this.logger.info("tool-indicator-hidden", { 
         routeKey: this.manifest.routeKey 
       });
     } catch (err) {
       // Ignore errors - message may already be gone
       this.toolIndicatorMessageId = undefined;
+      this.creatingIndicator = false;
     }
   }
 
