@@ -46,6 +46,40 @@ export class DiscordRenderer {
     // Tool operation queue to prevent races
     this.toolQueue = [];
     this.processingToolQueue = false;
+    // Store tool parameters for diff generation
+    this.toolParams = new Map();
+    // Text sending queue to prevent duplicate/race issues
+    this.textQueue = [];
+    this.processingTextQueue = false;
+    this.lastQueuedText = '';
+  }
+
+  enqueueTextSend(text) {
+    // Only queue if this is new text (not duplicate of last queued)
+    if (text !== this.lastQueuedText) {
+      this.textQueue.push(text);
+      this.lastQueuedText = text;
+      void this.processTextQueue();
+    }
+  }
+
+  async processTextQueue() {
+    if (this.processingTextQueue) return;
+    this.processingTextQueue = true;
+    
+    while (this.textQueue.length > 0) {
+      const text = this.textQueue.shift();
+      try {
+        await this.sendTextChunk(text);
+      } catch (error) {
+        await this.logger.warn("text-send-failed", { 
+          routeKey: this.manifest.routeKey, 
+          error: String(error) 
+        });
+      }
+    }
+    
+    this.processingTextQueue = false;
   }
 
   enqueueToolOperation(operation) {
@@ -298,6 +332,10 @@ export class DiscordRenderer {
       // Queue tool start operation to prevent races
       this.enqueueToolOperation(async () => {
         this.pendingTools++;
+        // Store parameters for later diff generation
+        if (event.toolName && event.parameters) {
+          this.toolParams.set(event.toolName, event.parameters);
+        }
         await this.showToolIndicator();
       });
     }
@@ -306,9 +344,15 @@ export class DiscordRenderer {
       this.enqueueToolOperation(async () => {
         const toolDisplay = `🛠️ **${event.toolName}**`;
         
-        // Extract content from tool result
+        // Get stored parameters for this tool
+        const params = this.toolParams.get(event.toolName);
+        if (params) {
+          this.toolParams.delete(event.toolName);
+        }
+        
+        // Extract content from tool result (pass params for diff generation)
         if (event.result) {
-          const { content, filename, isDiff } = this.extractToolContent(event);
+          const { content, filename, isDiff } = this.extractToolContent(event, params);
           
           if (content) {
             // Determine file extension based on tool type or filename
@@ -357,9 +401,12 @@ export class DiscordRenderer {
    * Extract readable content from tool result
    * Returns { content, filename, isDiff }
    */
-  extractToolContent(event) {
+  extractToolContent(event, storedParams = null) {
     const result = event.result;
     if (!result) return { content: null, filename: null, isDiff: false };
+    
+    // Use stored params if available (from tool_execution_start)
+    const params = storedParams || event.parameters || {};
     
     // Handle read tool - extract file content
     if (event.toolName === 'read' && result.content) {
@@ -369,7 +416,7 @@ export class DiscordRenderer {
         if (textBlock && textBlock.text) {
           return { 
             content: textBlock.text, 
-            filename: result.filePath || result.path || result.filename,
+            filename: result.filePath || result.path || params.filePath || params.path,
             isDiff: false 
           };
         }
@@ -378,19 +425,34 @@ export class DiscordRenderer {
       if (typeof result.content === 'string') {
         return { 
           content: result.content, 
-          filename: result.filePath || result.path || result.filename,
+          filename: result.filePath || result.path || params.filePath || params.path,
           isDiff: false 
         };
       }
     }
     
-    // Handle diff/edit tools
-    if ((event.toolName === 'edit' || event.toolName === 'apply_diff' || event.toolName === 'str_replace') && result.diff) {
-      return { 
-        content: result.diff, 
-        filename: result.filePath || result.path,
-        isDiff: true 
-      };
+    // Handle diff/edit tools - extract from parameters since SDK doesn't return diff
+    if (event.toolName === 'str_replace' || event.toolName === 'edit' || event.toolName === 'apply_diff') {
+      const filePath = params.filePath || params.path || result.filePath || result.path;
+      
+      if (params.old_string && params.new_string) {
+        // Create a simple unified diff format
+        const diff = `--- ${filePath || 'original'}\n+++ ${filePath || 'modified'}\n@@ -1,1 +1,1 @@\n-${params.old_string}\n+${params.new_string}`;
+        return { 
+          content: diff, 
+          filename: filePath,
+          isDiff: true 
+        };
+      }
+      
+      // Fallback: show the success message if no diff available
+      if (result.message) {
+        return {
+          content: result.message,
+          filename: filePath,
+          isDiff: false
+        };
+      }
     }
     
     // Handle other tools - try to find any readable content
@@ -410,116 +472,69 @@ export class DiscordRenderer {
   }
 
   async sendIncrementalResponse() {
-    // Prevent concurrent execution
-    if (this.sendingLock) {
-      await this.logger.info("send-incremental-locked", { 
-        routeKey: this.manifest.routeKey 
-      });
+    const fullText = this.currentAssistantText;
+    
+    // Safety: nothing to send or all already sent
+    if (!fullText || this.lastSentIndex >= fullText.length) {
       return;
     }
-    this.sendingLock = true;
     
-    try {
-      const fullText = this.currentAssistantText;
-      
-      // Safety: nothing to send or all already sent
-      if (!fullText || this.lastSentIndex >= fullText.length) {
-        await this.logger.info("send-incremental-no-content", { 
-          routeKey: this.manifest.routeKey,
-          fullTextLength: fullText?.length,
-          lastSentIndex: this.lastSentIndex
-        });
-        return;
-      }
-      
-      const unsentText = fullText.slice(this.lastSentIndex).trimStart();
-      
-      // Not enough content to send yet
-      if (!unsentText || unsentText.length < 20) {
-        await this.logger.info("send-incremental-too-short", { 
-          routeKey: this.manifest.routeKey,
-          unsentLength: unsentText?.length
-        });
-        return;
-      }
-      
-      // Check for paragraph break or sentence end in unsent portion
-      const paraBreakIndex = unsentText.indexOf('\n\n');
-      const hasParagraphBreak = paraBreakIndex >= 0;
-      
-      // Find sentence end if no paragraph break
-      let sendLength = 0;
-      if (hasParagraphBreak) {
-        sendLength = paraBreakIndex + 2; // Include the \n\n
+    const unsentText = fullText.slice(this.lastSentIndex).trimStart();
+    
+    // Not enough content to send yet
+    if (!unsentText || unsentText.length < 20) {
+      return;
+    }
+    
+    // Find a good break point
+    let sendLength = 0;
+    
+    // Check for paragraph break first
+    const paraBreakIndex = unsentText.indexOf('\n\n');
+    if (paraBreakIndex >= 0) {
+      sendLength = paraBreakIndex + 2;
+    } else {
+      // Check for sentence ending - require at least 50 chars
+      const sentenceMatch = unsentText.match(/.*[.!?]\s+/s);
+      if (sentenceMatch && sentenceMatch[0].length >= 50) {
+        sendLength = sentenceMatch[0].length;
       } else {
-        // Check for sentence ending - require at least 50 chars before break
-        // to avoid fragmenting short greetings like "Hi! How are you?"
-        const sentenceMatch = unsentText.match(/.*[.!?]\s+/s);
-        if (sentenceMatch && sentenceMatch[0].length >= 50) {
-          sendLength = sentenceMatch[0].length;
-        } else {
-          return; // No good break point yet - accumulate more content
-        }
+        return; // No good break yet
       }
-      
-      // Don't break inside code blocks
-      const textToConsider = unsentText.slice(0, sendLength);
-      const inCodeBlock = (textToConsider.match(/```/g) || []).length % 2 === 1;
-      if (inCodeBlock) {
-        return;
-      }
-      
-      // Must have substantial content (at least 30 chars to avoid fragmenting)
-      if (sendLength < 30) {
-        return;
-      }
-      
-      const toSend = textToConsider.trim();
-      if (!toSend) {
-        return;
-      }
-      
-      // CRITICAL: Check if we already sent this exact content
-      // This prevents race condition duplicates
-      const normalizedLast = this.lastSentContent?.trim();
-      const normalizedCurrent = toSend.trim();
-      if (normalizedLast === normalizedCurrent) {
-        await this.logger.info("duplicate-prevented", { 
-          routeKey: this.manifest.routeKey,
-          content: normalizedCurrent.slice(0, 50)
-        });
-        return;
-      }
-      
-      await this.logger.info("sending-incremental", { 
-        routeKey: this.manifest.routeKey,
-        content: normalizedCurrent.slice(0, 50),
-        lastSentContent: normalizedLast?.slice(0, 50)
-      });
-      
-      // Send the message
+    }
+    
+    // Don't break inside code blocks
+    const textToSend = unsentText.slice(0, sendLength).trim();
+    if ((textToSend.match(/```/g) || []).length % 2 === 1) {
+      return;
+    }
+    
+    if (!textToSend || textToSend.length < 30) {
+      return;
+    }
+    
+    // Update index and send immediately (queue prevents duplicates)
+    this.lastSentIndex += sendLength;
+    await this.sendTextChunk(textToSend);
+  }
+  
+  async sendTextChunk(text) {
+    try {
       const channel = await this.getTargetChannel();
       const message = await channel.send({ 
-        content: toSend.slice(0, DISCORD_MESSAGE_LIMIT), 
+        content: text.slice(0, DISCORD_MESSAGE_LIMIT), 
         allowedMentions: { parse: [] } 
       });
       
-      // Update tracking
       this.lastMessageId = message.id;
-      this.lastSentIndex += sendLength;
-      this.lastSentContent = normalizedCurrent; // Track what we just sent
+      this.lastSentContent = text;
       
       await this.logger.info("message-sent", { 
         routeKey: this.manifest.routeKey,
-        messageId: message.id,
-        lastSentIndex: this.lastSentIndex
+        messageId: message.id 
       });
-      
     } catch (error) {
-      // Log error but don't throw - sending is best effort
-      await this.logger.warn("incremental-send-failed", { error: String(error) });
-    } finally {
-      this.sendingLock = false;
+      await this.logger.warn("text-send-failed", { error: String(error) });
     }
   }
 
