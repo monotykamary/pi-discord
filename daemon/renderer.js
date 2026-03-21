@@ -69,12 +69,27 @@ export class DiscordRenderer {
     if (this.manifest.detailsThreadId) {
       try {
         const channel = await this.client.channels.fetch(this.manifest.detailsThreadId);
-        return channel && "send" in channel ? channel : undefined;
-      } catch {
-        this.manifest.detailsThreadId = undefined;
-        await this.persistManifest();
-        return undefined;
+        if (channel && "send" in channel) {
+          await this.logger.info("details-thread-reused", { 
+            routeKey: this.manifest.routeKey,
+            threadId: this.manifest.detailsThreadId 
+          });
+          return channel;
+        }
+        await this.logger.warn("details-thread-not-writable", { 
+          routeKey: this.manifest.routeKey,
+          threadId: this.manifest.detailsThreadId 
+        });
+      } catch (err) {
+        await this.logger.warn("details-thread-fetch-failed", { 
+          routeKey: this.manifest.routeKey,
+          threadId: this.manifest.detailsThreadId,
+          error: String(err) 
+        });
       }
+      // Clear stale thread ID
+      this.manifest.detailsThreadId = undefined;
+      await this.persistManifest();
     }
     return undefined;
   }
