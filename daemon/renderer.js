@@ -48,6 +48,7 @@ export class DiscordRenderer {
     this.processingToolQueue = false;
     // Store tool parameters for diff generation
     this.toolParams = new Map();
+    this.currentToolKey = null;
     // Text sending queue to prevent duplicate/race issues
     this.textQueue = [];
     this.processingTextQueue = false;
@@ -332,9 +333,13 @@ export class DiscordRenderer {
       // Queue tool start operation to prevent races
       this.enqueueToolOperation(async () => {
         this.pendingTools++;
-        // Store parameters for later diff generation
-        if (event.toolName && event.parameters) {
-          this.toolParams.set(event.toolName, event.parameters);
+        // Store parameters with unique key for each tool execution
+        if (event.toolName) {
+          const key = `${event.toolName}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+          this.currentToolKey = key; // Store for retrieval
+          if (event.parameters) {
+            this.toolParams.set(key, { name: event.toolName, params: event.parameters });
+          }
         }
         await this.showToolIndicator();
       });
@@ -344,10 +349,13 @@ export class DiscordRenderer {
       this.enqueueToolOperation(async () => {
         const toolDisplay = `🛠️ **${event.toolName}**`;
         
-        // Get stored parameters for this tool
-        const params = this.toolParams.get(event.toolName);
-        if (params) {
-          this.toolParams.delete(event.toolName);
+        // Get stored parameters using the key from start
+        const key = this.currentToolKey;
+        const stored = key ? this.toolParams.get(key) : null;
+        const params = stored?.params;
+        if (key) {
+          this.toolParams.delete(key);
+          this.currentToolKey = null;
         }
         
         // Extract content from tool result (pass params for diff generation)
@@ -407,6 +415,14 @@ export class DiscordRenderer {
     
     // Use stored params if available (from tool_execution_start)
     const params = storedParams || event.parameters || {};
+    
+    // DEBUG: Log what we got
+    this.logger.info("extract-tool-debug", {
+      toolName: event.toolName,
+      paramKeys: Object.keys(params),
+      hasOldString: !!(params.old_string || params.search || params.oldString || params.old),
+      hasNewString: !!(params.new_string || params.replace || params.newString || params.new)
+    });
     
     // Handle read tool - extract file content
     if (event.toolName === 'read' && result.content) {
