@@ -76,7 +76,7 @@ export class RouteSessionHost {
 
   private async createSession(): Promise<AgentSession> {
     const authStorage = AuthStorage.create(`${this.agentDir}/auth.json`);
-    const modelRegistry = new ModelRegistry(authStorage, `${this.agentDir}/models.json`);
+    const modelRegistry = ModelRegistry.create(authStorage, `${this.agentDir}/models.json`);
     const settingsManager = SettingsManager.inMemory({
       compaction: { enabled: true },
       retry: { enabled: true, maxRetries: 2 },
