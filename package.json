@@ -16,7 +16,7 @@
     ]
   },
   "dependencies": {
-    "@earendil-works/pi-coding-agent": "^0.65.0",
+    "@earendil-works/pi-coding-agent": "*",
     "@sinclair/typebox": "^0.34.41",
     "discord.js": "^14.25.1"
   },
