@@ -1,5 +1,5 @@
 import { Type } from "@sinclair/typebox";
-import type { ExtensionAPI, ExtensionUIContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 
 export interface RuntimeInterface {
   getInjectedContext: () => Promise<string>;

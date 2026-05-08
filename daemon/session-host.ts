@@ -5,8 +5,8 @@ import {
   ModelRegistry,
   SessionManager,
   SettingsManager,
-} from "@mariozechner/pi-coding-agent";
-import type { AgentSession } from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
+import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import { buildInjectedContext } from "./prompt-shaper.js";
 import { createHeadlessUi } from "./headless-ui.js";
 import { createRouteSessionExtension } from "./session-extension.js";

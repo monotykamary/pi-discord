@@ -5,7 +5,7 @@ import os from "node:os";
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import piDiscordExtension from "../index.js";
 import { ensureDir, pathExists } from "../lib/fs.js";
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 function createMockPi(messages: unknown[] = []): ExtensionAPI & { definition?: any; name?: string } {
   return {
