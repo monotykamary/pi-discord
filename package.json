@@ -16,14 +16,22 @@
     ]
   },
   "dependencies": {
-    "@earendil-works/pi-coding-agent": "*",
-    "@sinclair/typebox": "^0.34.41",
-    "discord.js": "^14.25.1"
+    "discord.js": "14.26.4"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": ">=0.74.0",
+    "@sinclair/typebox": "0.34.49"
   },
   "devDependencies": {
-    "@types/node": "^25.3.3",
-    "tsx": "^4.21.0",
-    "typescript": "^5.8.2",
-    "vitest": "^2.1.8"
+    "@types/node": "25.9.1",
+    "tsx": "4.22.3",
+    "typescript": "6.0.3",
+    "vitest": "4.1.7"
+  },
+  "overrides": {
+    "brace-expansion": "5.0.6",
+    "fast-xml-builder": "1.2.0",
+    "protobufjs": "8.4.0",
+    "ws": "8.20.1"
   }
 }
