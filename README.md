@@ -1,10 +1,17 @@
-<p>
-  <img src="banner.png" alt="pi-discord" width="1100">
-</p>
+<div align="center">
 
-# pi-discord
+# 🤖 pi-discord
 
-A Discord bot that brings Pi into your server. Mention the bot or use slash commands to run Pi with full tool access, persistent sessions, and optional project extensions.
+**Pi in your [Discord](https://discord.com) server**
+
+_Mention the bot or use slash commands — persistent sessions, full tool access, live streaming for [pi](https://github.com/earendil-works/pi-coding-agent)._
+
+[![pi extension](https://img.shields.io/badge/pi-extension-blueviolet)](https://github.com/earendil-works/pi-coding-agent)
+[![license](https://img.shields.io/badge/license-MIT-blue)](./LICENSE)
+
+</div>
+
+---
 
 **How it works:** A detached daemon listens for Discord mentions, DMs, and slash commands. Each channel gets its own persistent Pi session, so follow-up questions remember earlier conversation. When a message comes in, the daemon calls `session.prompt()`, subscribes to the response stream, and live-updates the Discord reply as text streams back. Operator runs `/discord start|stop|status` from Pi to control it.
 
