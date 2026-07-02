@@ -1,6 +1,6 @@
-import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { sanitizeSegment } from "./fs.js";
 
 const packageRoot = path.dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
@@ -39,7 +39,7 @@ export interface RoutePaths {
 }
 
 export function getPaths(options: PathsOptions = {}): Paths {
-  const agentDir = options.agentDir ?? path.join(homedir(), ".pi", "agent");
+  const agentDir = options.agentDir ?? getAgentDir();
   const workspaceDir = options.workspaceDir ?? path.join(agentDir, "pi-discord");
   return {
     packageRoot,

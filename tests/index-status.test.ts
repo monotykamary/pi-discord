@@ -26,7 +26,9 @@ function createMockPi(messages: unknown[] = []): ExtensionAPI & { definition?: a
 test("/discord status does not create a config file when none exists", async () => {
   const tempHome = await mkdtemp(path.join(os.tmpdir(), "pi-discord-home-"));
   const originalHome = process.env.HOME;
+  const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
   process.env.HOME = tempHome;
+  process.env.PI_CODING_AGENT_DIR = path.join(tempHome, ".pi", "agent");
 
   const messages: unknown[] = [];
   const pi = createMockPi(messages);
@@ -40,13 +42,16 @@ test("/discord status does not create a config file when none exists", async () 
     assert.match((messages.at(-1) as any).content, /Config errors: Missing `botToken`\.; Missing `applicationId`\./);
   } finally {
     process.env.HOME = originalHome;
+    process.env.PI_CODING_AGENT_DIR = originalAgentDir;
   }
 });
 
 test("/discord open-config can open malformed JSON for repair", async () => {
   const tempHome = await mkdtemp(path.join(os.tmpdir(), "pi-discord-home-malformed-"));
   const originalHome = process.env.HOME;
+  const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
   process.env.HOME = tempHome;
+  process.env.PI_CODING_AGENT_DIR = path.join(tempHome, ".pi", "agent");
 
   const configPath = path.join(tempHome, ".pi", "agent", "pi-discord", "config.json");
   await ensureDir(path.dirname(configPath));
@@ -70,13 +75,16 @@ test("/discord open-config can open malformed JSON for repair", async () => {
     assert.equal(editorText, '{\n  "botToken": "abc",\n');
   } finally {
     process.env.HOME = originalHome;
+    process.env.PI_CODING_AGENT_DIR = originalAgentDir;
   }
 });
 
 test("/discord setup without UI does not create config as a side effect", async () => {
   const tempHome = await mkdtemp(path.join(os.tmpdir(), "pi-discord-home-setup-no-ui-"));
   const originalHome = process.env.HOME;
+  const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
   process.env.HOME = tempHome;
+  process.env.PI_CODING_AGENT_DIR = path.join(tempHome, ".pi", "agent");
 
   const messages: unknown[] = [];
   const pi = createMockPi(messages);
@@ -90,13 +98,16 @@ test("/discord setup without UI does not create config as a side effect", async 
     assert.match((messages.at(-1) as any).content, /Interactive setup requires Pi UI/);
   } finally {
     process.env.HOME = originalHome;
+    process.env.PI_CODING_AGENT_DIR = originalAgentDir;
   }
 });
 
 test("/discord setup falls back to defaults when existing config JSON is malformed", async () => {
   const tempHome = await mkdtemp(path.join(os.tmpdir(), "pi-discord-home-setup-malformed-"));
   const originalHome = process.env.HOME;
+  const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
   process.env.HOME = tempHome;
+  process.env.PI_CODING_AGENT_DIR = path.join(tempHome, ".pi", "agent");
 
   const configPath = path.join(tempHome, ".pi", "agent", "pi-discord", "config.json");
   await ensureDir(path.dirname(configPath));
@@ -124,13 +135,16 @@ test("/discord setup falls back to defaults when existing config JSON is malform
     ]);
   } finally {
     process.env.HOME = originalHome;
+    process.env.PI_CODING_AGENT_DIR = originalAgentDir;
   }
 });
 
 test("/discord setup full cancel does not overwrite malformed config", async () => {
   const tempHome = await mkdtemp(path.join(os.tmpdir(), "pi-discord-home-setup-cancel-"));
   const originalHome = process.env.HOME;
+  const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
   process.env.HOME = tempHome;
+  process.env.PI_CODING_AGENT_DIR = path.join(tempHome, ".pi", "agent");
 
   const configPath = path.join(tempHome, ".pi", "agent", "pi-discord", "config.json");
   const originalText = '{\n  "botToken": "abc",\n';
@@ -151,13 +165,16 @@ test("/discord setup full cancel does not overwrite malformed config", async () 
     assert.equal(await readFile(configPath, "utf8"), originalText);
   } finally {
     process.env.HOME = originalHome;
+    process.env.PI_CODING_AGENT_DIR = originalAgentDir;
   }
 });
 
 test("/discord status reports malformed config instead of crashing", async () => {
   const tempHome = await mkdtemp(path.join(os.tmpdir(), "pi-discord-home-status-malformed-"));
   const originalHome = process.env.HOME;
+  const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
   process.env.HOME = tempHome;
+  process.env.PI_CODING_AGENT_DIR = path.join(tempHome, ".pi", "agent");
 
   const configPath = path.join(tempHome, ".pi", "agent", "pi-discord", "config.json");
   await ensureDir(path.dirname(configPath));
@@ -173,13 +190,16 @@ test("/discord status reports malformed config instead of crashing", async () =>
     assert.match((messages.at(-1) as any).content, /Config read error:/);
   } finally {
     process.env.HOME = originalHome;
+    process.env.PI_CODING_AGENT_DIR = originalAgentDir;
   }
 });
 
 test("/discord start reports malformed config instead of crashing", async () => {
   const tempHome = await mkdtemp(path.join(os.tmpdir(), "pi-discord-home-start-malformed-"));
   const originalHome = process.env.HOME;
+  const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
   process.env.HOME = tempHome;
+  process.env.PI_CODING_AGENT_DIR = path.join(tempHome, ".pi", "agent");
 
   const configPath = path.join(tempHome, ".pi", "agent", "pi-discord", "config.json");
   await ensureDir(path.dirname(configPath));
@@ -196,13 +216,16 @@ test("/discord start reports malformed config instead of crashing", async () => 
     assert.match((messages.at(-1) as any).content, /Run \/discord open-config to repair it\./);
   } finally {
     process.env.HOME = originalHome;
+    process.env.PI_CODING_AGENT_DIR = originalAgentDir;
   }
 });
 
 test("/discord setup reports unreadable config paths instead of silently falling back", async () => {
   const tempHome = await mkdtemp(path.join(os.tmpdir(), "pi-discord-home-setup-unreadable-"));
   const originalHome = process.env.HOME;
+  const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
   process.env.HOME = tempHome;
+  process.env.PI_CODING_AGENT_DIR = path.join(tempHome, ".pi", "agent");
 
   const configPath = path.join(tempHome, ".pi", "agent", "pi-discord", "config.json");
   await ensureDir(configPath);
@@ -224,13 +247,16 @@ test("/discord setup reports unreadable config paths instead of silently falling
     assert.match((messages.at(-1) as any).content, /Could not read .*config\.json:/);
   } finally {
     process.env.HOME = originalHome;
+    process.env.PI_CODING_AGENT_DIR = originalAgentDir;
   }
 });
 
 test("/discord open-config reports unreadable config paths instead of crashing", async () => {
   const tempHome = await mkdtemp(path.join(os.tmpdir(), "pi-discord-home-open-unreadable-"));
   const originalHome = process.env.HOME;
+  const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
   process.env.HOME = tempHome;
+  process.env.PI_CODING_AGENT_DIR = path.join(tempHome, ".pi", "agent");
 
   const configPath = path.join(tempHome, ".pi", "agent", "pi-discord", "config.json");
   await ensureDir(configPath);
@@ -252,5 +278,6 @@ test("/discord open-config reports unreadable config paths instead of crashing",
     assert.match((messages.at(-1) as any).content, /Could not read .*config\.json:/);
   } finally {
     process.env.HOME = originalHome;
+    process.env.PI_CODING_AGENT_DIR = originalAgentDir;
   }
 });
