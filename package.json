@@ -1,7 +1,7 @@
 {
   "name": "pi-discord",
   "private": false,
-  "version": "0.1.3",
+  "version": "0.1.4",
   "type": "module",
   "bin": {
     "pi-discord-daemon": "./bin/pi-discord-daemon.mjs"
@@ -19,7 +19,7 @@
     "discord.js": "14.26.4"
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": ">=0.74.0",
+    "@earendil-works/pi-coding-agent": ">=0.80.6",
     "@sinclair/typebox": "0.34.49"
   },
   "devDependencies": {

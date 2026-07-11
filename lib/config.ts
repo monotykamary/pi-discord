@@ -9,7 +9,7 @@ import {
 import { ensureDir, readJson, writeJson } from "./fs.js";
 import type { Paths } from "./paths.js";
 
-const THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh"]);
+const THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 
 function toStringArray(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
@@ -75,7 +75,7 @@ export interface PiDiscordConfig {
   queueLeaseMs: number;
   primaryFlushMs: number;
   defaultModel?: string;
-  defaultThinkingLevel: "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+  defaultThinkingLevel: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
   triggerWords: string[];
   triggerWarmOnly: boolean;
   hotZoneMinutes: number;
