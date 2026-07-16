@@ -1,8 +1,7 @@
 import {
-  AuthStorage,
   createAgentSession,
   DefaultResourceLoader,
-  ModelRegistry,
+  ModelRuntime,
   SessionManager,
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
@@ -75,8 +74,10 @@ export class RouteSessionHost {
   }
 
   private async createSession(): Promise<AgentSession> {
-    const authStorage = AuthStorage.create(`${this.agentDir}/auth.json`);
-    const modelRegistry = ModelRegistry.create(authStorage, `${this.agentDir}/models.json`);
+    const modelRuntime = await ModelRuntime.create({
+      authPath: `${this.agentDir}/auth.json`,
+      modelsPath: `${this.agentDir}/models.json`,
+    });
     const settingsManager = SettingsManager.inMemory({
       compaction: { enabled: true },
       retry: { enabled: true, maxRetries: 2 },
@@ -111,15 +112,14 @@ export class RouteSessionHost {
     if (this.config.defaultModel) {
       const [provider, ...rest] = this.config.defaultModel.split("/");
       if (provider && rest.length > 0) {
-        model = modelRegistry.find(provider, rest.join("/"));
+        model = modelRuntime.getModel(provider, rest.join("/"));
       }
     }
 
     const { session } = await createAgentSession({
       cwd: this.manifest.executionRoot,
       agentDir: this.agentDir,
-      authStorage,
-      modelRegistry,
+      modelRuntime,
       sessionManager,
       settingsManager,
       resourceLoader,
