@@ -1,13 +1,13 @@
 {
   "name": "pi-discord",
   "private": false,
-  "version": "0.1.5",
+  "version": "0.1.6",
   "type": "module",
   "bin": {
     "pi-discord-daemon": "./bin/pi-discord-daemon.mjs"
   },
   "scripts": {
-    "test": "node --test --experimental-strip-types tests/**/*.test.ts",
+    "test": "node --import tsx --test tests/**/*.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "pi": {
