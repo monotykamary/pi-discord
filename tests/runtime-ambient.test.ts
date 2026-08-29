@@ -14,8 +14,17 @@ test("ambient guild messages do not create route state before the bot is engaged
   const config = createDefaultConfig(paths);
   config.allowedGuildIds = ["g1"];
 
-  const daemon = new PiDiscordDaemon({ paths, config });
-  daemon.client.user = { id: "bot-1" };
+  const daemon = new PiDiscordDaemon({
+    paths,
+    config,
+    client: { user: { id: "bot-1" } },
+    logger: {
+    log: async () => undefined,
+    info: async () => undefined,
+    warn: async () => undefined,
+    error: async () => undefined,
+  },
+  });
 
   await daemon.handleMessageCreate({
     id: "m1",

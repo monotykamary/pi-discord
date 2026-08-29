@@ -12,8 +12,8 @@ test("injected context excludes the active inbound source to avoid duplicating t
   await writeFile(memoryPath, "Remember the deployment project name.", "utf8");
 
   const journalEntries = [
-    { kind: "ambient", sourceId: "a1", authorName: "alice", text: "Can someone inspect prod?" },
-    { kind: "inbound", sourceId: "m2", authorName: "bob", text: "current request should not be duplicated" },
+    { kind: "ambient", type: "ambient", sourceId: "a1", authorName: "alice", text: "Can someone inspect prod?", timestamp: 1756000000000 },
+    { kind: "inbound", type: "inbound", sourceId: "m2", authorName: "bob", text: "current request should not be duplicated", timestamp: 1756000001000 },
   ];
   const journal = {
     recent(limit: number, predicate: (entry: any) => boolean) {
@@ -28,6 +28,6 @@ test("injected context excludes the active inbound source to avoid duplicating t
   });
 
   assert.match(injected, /Remember the deployment project name/);
-  assert.match(injected, /alice: Can someone inspect prod\?/);
+  assert.match(injected, /ambient: "Can someone inspect prod\?"/);
   assert.doesNotMatch(injected, /current request should not be duplicated/);
 });

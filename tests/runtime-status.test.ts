@@ -26,7 +26,17 @@ test("writeStatus preserves bot metadata across later updates", async () => {
 test("stop clears active runs before writing stopping status", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-discord-runtime-stop-"));
   const paths = getPaths({ agentDir: tempDir, workspaceDir: path.join(tempDir, "workspace") });
-  const daemon = new PiDiscordDaemon({ paths, config: createDefaultConfig(paths) });
+  const daemon = new PiDiscordDaemon({
+    paths,
+    config: createDefaultConfig(paths),
+    client: { destroy: async () => undefined },
+    logger: {
+    log: async () => undefined,
+    info: async () => undefined,
+    warn: async () => undefined,
+    error: async () => undefined,
+  },
+  });
 
   daemon.currentRuns.set("route-1", { abort: async () => undefined });
   await daemon.stop();
