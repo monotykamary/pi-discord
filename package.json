@@ -1,7 +1,7 @@
 {
   "name": "pi-discord",
   "private": false,
-  "version": "0.2.7",
+  "version": "0.2.8",
   "type": "module",
   "bin": {
     "pi-discord-daemon": "./bin/pi-discord-daemon.mjs"
@@ -23,6 +23,7 @@
     "@sinclair/typebox": "0.34.49"
   },
   "devDependencies": {
+    "@earendil-works/pi-server": "0.85.0",
     "@types/node": "25.9.1",
     "tsx": "4.22.3",
     "typescript": "6.0.3",
@@ -33,6 +34,6 @@
     "fast-xml-builder": "1.2.0",
     "protobufjs": "8.4.0",
     "ws": "8.20.1",
-    "@earendil-works/pi-coding-agent": "0.84.4"
+    "@earendil-works/pi-coding-agent": "0.85.0"
   }
 }

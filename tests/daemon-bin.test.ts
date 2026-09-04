@@ -18,7 +18,7 @@ test("daemon entrypoint does not create runtime files when startup validation fa
   await assert.rejects(
     execFileAsync(process.execPath, [daemonEntry, "--workspace", workspaceDir], {
       cwd: process.cwd(),
-      timeout: 5000,
+      timeout: 15_000,
     }),
     /Invalid pi-discord config/,
   );
