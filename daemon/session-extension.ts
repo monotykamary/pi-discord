@@ -1,4 +1,4 @@
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import type { ExtensionAPI, ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 
 export interface RuntimeInterface {
