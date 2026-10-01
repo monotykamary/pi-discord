@@ -1,7 +1,7 @@
 {
   "name": "pi-discord",
   "private": false,
-  "version": "0.2.12",
+  "version": "0.2.13",
   "type": "module",
   "bin": {
     "pi-discord-daemon": "./bin/pi-discord-daemon.mjs"
@@ -28,7 +28,7 @@
     "tsx": "4.22.3",
     "typescript": "6.0.3",
     "vitest": "4.1.7",
-    "@earendil-works/pi-coding-agent": "0.99.0",
+    "@earendil-works/pi-coding-agent": "1.0.0",
     "typebox": "1.3.27"
   },
   "overrides": {
@@ -36,6 +36,6 @@
     "fast-xml-builder": "1.2.0",
     "protobufjs": "8.4.0",
     "ws": "8.20.1",
-    "@earendil-works/pi-coding-agent": "0.99.0"
+    "@earendil-works/pi-coding-agent": "1.0.0"
   }
 }
